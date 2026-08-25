@@ -142,8 +142,9 @@ Run all of these. Fix anything that fails *now*.
 
       ./extras cli editors lsp cpp python
 
-- [ ] **Shell**, if you want zsh — installs it, wires up the plugins, and
-      offers to change your login shell:
+- [ ] **Shell** — installs zsh, clones autosuggestions, syntax-highlighting
+      and completions into `~/.zsh/plugins` where your zshrc expects them,
+      and offers to change your login shell:
 
       ./extras shell
 
