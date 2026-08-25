@@ -94,6 +94,18 @@ three layers at once later.
 
       ./deploy-dotfiles --list        # what's there, and what's deployed
       ./deploy-dotfiles --dry-run     # change nothing, show the plan
+
+- [ ] **Fix `~/.ssh` permissions** if you brought keys over from another
+      machine — `deploy-dotfiles` checks this at the end of every run, or on
+      its own:
+
+      ./deploy-dotfiles --ssh-perms --dry-run    # report only
+      ./deploy-dotfiles --ssh-perms              # report, then offer to fix
+
+      Git stores no permissions beyond the executable bit and FAT32 stores
+      none at all, so keys arriving by repo or USB stick land at 0644 and
+      ssh refuses them. Note the error names the key file even when the
+      real offender is `$HOME` or `~/.ssh` being group-writable.
 - [ ] **Set your fonts.** The script installed FiraCode Nerd Font and
       Symbols Nerd Font Mono into `~/.local/share/fonts` (it asks first; skip
       with `--no-fonts`). Point kitty at `FiraCode Nerd Font`, and put

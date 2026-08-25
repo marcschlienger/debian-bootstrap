@@ -18,6 +18,7 @@
 #   ./deploy-dotfiles --dry-run        # show what stow would do, change nothing
 #   ./deploy-dotfiles --delete zsh     # unstow a package
 #   ./deploy-dotfiles --no-pull        # do not touch an existing checkout
+#   ./deploy-dotfiles --ssh-perms      # only check and fix ~/.ssh permissions
 #
 # The repo is overridable, since these are one person's dotfiles:
 #   DOTFILES_REPO=https://github.com/you/dotfiles.git ./deploy-dotfiles
@@ -45,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)   DRY_RUN=1 ;;
     --no-pull)   NO_PULL=1 ;;
     --delete)    ACTION="delete" ;;
+    --ssh-perms) ACTION="ssh-perms" ;;
     --repo)      DOTFILES_REPO="${2:-}"
                  [[ -n "$DOTFILES_REPO" ]] || die "--repo needs a URL"
                  shift ;;
@@ -54,6 +56,87 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+# ---------------------------------------------------------------------------
+# SSH permissions
+#
+# This belongs here because this is where the damage happens. Git records no
+# permissions beyond the executable bit, and a FAT32 stick records none at
+# all, so anything arriving on a new machine through a repo or a USB stick
+# lands at 0644 — every time, without fail.
+#
+# ssh then refuses the key, and sshd's StrictModes refuses authorized_keys.
+# The message names the file, which is why people chmod the file and stay
+# broken: the offender is often $HOME or ~/.ssh being writable by the group.
+#
+# Detection is by mode, not by filename. A key called id_work or deploy.pem
+# is still a key.
+# ---------------------------------------------------------------------------
+ssh_perm_offenders() {
+  [[ -d "$HOME/.ssh" ]] || return 0
+
+  # sshd refuses authorized_keys when the home directory itself is writable
+  # by anyone other than you, and blames authorized_keys when it does.
+  find "$HOME" -maxdepth 0 \( -perm -g+w -o -perm -o+w \) 2>/dev/null
+
+  find "$HOME/.ssh" -type d ! -perm 700 2>/dev/null
+
+  # Everything except public keys and known_hosts must be yours alone.
+  find "$HOME/.ssh" -type f ! -name '*.pub' ! -name 'known_hosts*' \
+       \( -perm -g+r -o -perm -o+r -o -perm -g+w -o -perm -o+w \) 2>/dev/null
+}
+
+ssh_perm_fix() {
+  chmod go-w "$HOME"
+  chmod 700 "$HOME/.ssh"
+  find "$HOME/.ssh" -type d -exec chmod 700 {} +
+  find "$HOME/.ssh" -type f -exec chmod 600 {} +
+  # Public keys and known_hosts are not secret, and some tooling expects to
+  # be able to read them.
+  find "$HOME/.ssh" -type f \( -name '*.pub' -o -name 'known_hosts*' \) \
+       -exec chmod 644 {} + 2>/dev/null || true
+}
+
+check_ssh_perms() {
+  [[ -d "$HOME/.ssh" ]] || { say "No ~/.ssh — nothing to check."; return 0; }
+
+  local offenders
+  offenders="$(ssh_perm_offenders || true)"
+
+  if [[ -z "$offenders" ]]; then
+    say "SSH permissions are fine."
+    return 0
+  fi
+
+  warn "SSH permissions ssh will reject:"
+  printf '%s\n' "$offenders" | while IFS= read -r f; do
+    [[ -n "$f" ]] && printf '    %s\n' "$(ls -ld "$f" 2>/dev/null || echo "$f")"
+  done
+
+  if [[ $DRY_RUN -eq 1 ]]; then
+    say "Dry run — not changing them."
+    return 0
+  fi
+
+  local r=""
+  read -rp "Fix them? [Y/n] " r || true
+  [[ "${r:-y}" != [Nn]* ]] || { warn "Left alone."; return 0; }
+
+  ssh_perm_fix
+
+  offenders="$(ssh_perm_offenders || true)"
+  if [[ -z "$offenders" ]]; then
+    say "Fixed."
+  else
+    warn "Still wrong — look at these by hand:"
+    printf '%s\n' "$offenders" | sed 's/^/    /'
+  fi
+}
+
+if [[ "$ACTION" == "ssh-perms" ]]; then
+  check_ssh_perms
+  exit 0
+fi
 
 command -v stow >/dev/null || die "stow is not installed. sudo apt install stow"
 command -v git  >/dev/null || die "git is not installed. sudo apt install git"
@@ -259,6 +342,8 @@ EOF
 fi
 
 [[ ${#FAILED[@]} -gt 0 ]] && warn "Failed packages: ${FAILED[*]}"
+
+check_ssh_perms
 
 cat <<'EOF'
 
