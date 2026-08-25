@@ -372,6 +372,86 @@ Some apps ignore it; those need `~/.config/<app>/<app>-flags.conf` containing
 **dies with the source application** on Wayland. Add `clipman` or `cliphist`
 plus a `wl-paste --watch` line in your sway config if that bothers you.
 
+### No blue light filter
+
+Two tools, both in Debian, both tiny. Pick one — wlroots hands
+`wlr-gamma-control` to a single client at a time, so running both means the
+second one silently gets nothing.
+
+**wlsunset is the one in `extras desktop`**, and the reason is the shape of
+the thing rather than the feature list: no config file, no location
+provider, and therefore no geoclue to allowlist and nothing to correct if
+you move. gammastep's real differentiator is its tray indicator, and on
+sway a tray is itself a project (§10) — so its advantage costs setup rather
+than saving it.
+
+```bash
+# wlsunset — no config file, everything on the command line
+exec wlsunset -l 52.5 -L 13.4 -t 3800 -T 6500
+
+# gammastep — automatic, config file, optional tray indicator
+exec gammastep
+```
+
+`-l` is latitude and `-L` is longitude; transposing them is the usual
+mistake, and a longitude in the latitude slot gives you sunset times for
+somewhere you are not. wlsunset also takes fixed times instead, which
+removes location handling entirely:
+
+```bash
+exec wlsunset -S 07:00 -s 21:00 -t 3800 -T 6500
+```
+
+**Three Debian-specific traps:**
+
+- **`redshift` is not an option here.** It is the X11 original that
+  gammastep forked from. Its `randr` method finds nothing under sway and its
+  `drm` method fights the running compositor. It installs cleanly and does
+  nothing, which is the worst possible failure.
+- **Debian's gammastep package ships no systemd user unit**, so the
+  `systemctl --user enable --now gammastep` you will find in every online
+  guide fails with "Unit gammastep.service not found". Start it from your
+  sway config instead.
+- **Do not use gammastep's `geoclue2` location provider.** It needs the
+  geoclue daemon *and* an allowlist entry in `/etc/geoclue/geoclue.conf`,
+  and without that it gets no location and does nothing. `manual` with
+  coordinates is one line and needs no daemon.
+
+A minimal `~/.config/gammastep/config.ini`, if you go that way:
+
+```ini
+[general]
+temp-day=6500
+temp-night=3800
+fade=1
+location-provider=manual
+adjustment-method=wayland
+
+[manual]
+lat=52.5
+lon=13.4
+```
+
+For on-demand shifts, either tool's one-shot mode makes a good keybinding
+and exits immediately, so it does not conflict with a running daemon:
+
+```
+bindsym $mod+Shift+n exec gammastep -O 3500
+bindsym $mod+Shift+m exec gammastep -x
+```
+
+**When it does nothing at all**, check that the binary exists before
+anything else. `exec` failures in a sway config go to sway's stderr, which
+disappears the moment sway takes over the tty — so an `exec` line for a
+package you have not installed fails completely silently, and a config
+carried over from another machine is the usual way that happens.
+
+```bash
+command -v wlsunset gammastep
+pgrep -a 'wlsunset|gammastep'     # is something else already holding gamma?
+swaymsg -t get_config | grep -n 'wlsunset\|gammastep'
+```
+
 ### Screen never locks / locks during video
 
 `swayidle` has no idea what you're doing. Standard config:

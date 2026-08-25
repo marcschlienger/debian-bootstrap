@@ -78,7 +78,11 @@ GROUP_desktop=(
   gvfs gvfs-backends
   udiskie         # automount removable media
   wdisplays       # GUI display arrangement; kanshi handles the automatic case
-  gammastep       # night light
+  wlsunset        # night light. Chosen over gammastep deliberately: no
+                  # config file, no location provider (so no geoclue to
+                  # allowlist), and -S/-s takes fixed times instead of
+                  # coordinates. gammastep's edge is its tray indicator,
+                  # which on sway costs you a tray. See guide §4.
   pavucontrol     # when nmtui-style TUI isn't enough for audio routing
 )
 
@@ -685,6 +689,39 @@ Python on Debian — the one rule that matters:
   Recommended next step — uv handles venvs, versions and installs, and is
   far faster than pip:
     pipx install uv
+
+EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" desktop "* ]]; then
+  cat <<'EOF'
+
+Night light: wlsunset is installed. Add one line to your sway config —
+
+  exec wlsunset -S 07:00 -s 21:00 -t 3800 -T 6500
+
+  Fixed times, so there is no location to configure and nothing to correct
+  if you travel. With coordinates instead, if you prefer real sunset:
+
+  exec wlsunset -l 52.5 -L 13.4 -t 3800 -T 6500
+
+  -l is latitude, -L is longitude. Transposing them is the usual mistake.
+
+If you would rather have gammastep — config file, tray indicator — it is a
+straight swap, but read guide §4 first:
+
+  - `systemctl --user enable --now gammastep` fails on Debian. The package
+    ships no systemd user unit, whatever the internet tells you.
+  - Its geoclue2 provider needs an allowlist entry in
+    /etc/geoclue/geoclue.conf and does nothing without one. Use `manual`.
+  - Only run ONE of them: wlroots gives gamma control to a single client.
+  - redshift is the X11 original. Under sway it installs perfectly cleanly
+    and does nothing at all.
+
+An `exec` line for a binary you have not installed fails silently — sway's
+stderr is gone once it takes the tty. Check the binary first:
+
+  command -v wlsunset gammastep
 
 EOF
 fi
