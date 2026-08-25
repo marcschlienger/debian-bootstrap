@@ -21,6 +21,27 @@ die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 APPS=(tailscale mullvad-browser cryptomator)
 
 # ---------------------------------------------------------------------------
+# First installable name from a list.
+#
+# Library packages carry their SONAME, so the name changes out from under you
+# between releases: libfuse3-3 in bookworm, libfuse3-4 in trixie; libfuse2
+# became libfuse2t64 in the 64-bit time_t transition. Hardcoding one means
+# the script breaks on a release it was not written against, and apt's error
+# reads like the package is missing rather than misnamed.
+#
+# `apt-cache show` is not a good enough test: it succeeds for names that only
+# appear in some dependency list. policy tells us apt could really install it.
+# ---------------------------------------------------------------------------
+apt_candidate() {
+  local p cand
+  for p in "$@"; do
+    cand="$(apt-cache policy "$p" 2>/dev/null | awk -F': ' '/Candidate:/{print $2}')"
+    if [[ -n "$cand" && "$cand" != "(none)" ]]; then printf '%s\n' "$p"; return 0; fi
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Fetch a binary file to a path, byte for byte.
 #
 # Signing keys are BINARY gpg keyrings and must never pass through a shell
@@ -300,14 +321,23 @@ EOF
       ;;
     *)
       say "Installing FUSE support"
-      sudo apt-get install -y fuse3 libfuse3-3
+      # Just fuse3 — it already depends on the right libfuse3-N, and naming
+      # that library here only bakes in a name with a release-long shelf life.
+      sudo apt-get install -y fuse3
 
       say "Installing FUSE support for AppImages"
       # libfuse2 is what type-2 AppImages actually need; Debian defaults to
       # fuse3 only. Without this you get "dlopen(): error loading
-      # libfuse.so.2", which looks like a broken download but isn't.
-      sudo apt-get install -y fuse3 libfuse2t64 2>/dev/null \
-        || sudo apt-get install -y fuse3 libfuse2
+      # libfuse.so.2", which looks like a broken download but isn't. Nothing
+      # depends on it, so unlike libfuse3 it has to be named — resolved
+      # rather than guessed.
+      local libfuse2
+      if libfuse2="$(apt_candidate libfuse2t64 libfuse2)"; then
+        sudo apt-get install -y "$libfuse2"
+      else
+        warn "No libfuse2 package in this release (tried libfuse2t64, libfuse2)."
+        warn "Type-2 AppImages will need --appimage-extract-and-run."
+      fi
 
       cat <<'EOF'
 
