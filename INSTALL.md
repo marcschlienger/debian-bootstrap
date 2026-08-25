@@ -63,7 +63,7 @@ three layers at once later.
 
 - [ ] Get the scripts on the machine (mount the USB, or
       `sudo apt install git` and clone).
-- [ ] `chmod +x bootstrap-sway extras install-thirdparty appimage-manage build-emacs deploy-dotfiles`
+- [ ] `chmod +x bootstrap-sway extras install-thirdparty appimage-manage build-emacs deploy-dotfiles default-apps`
 
 ---
 
@@ -210,6 +210,14 @@ Run all of these. Fix anything that fails *now*.
       `./install-thirdparty cryptomator` and choose AppImage. → guide §10
 - [ ] **Point Nextcloud at the ENCRYPTED vault directory**, never the unlocked
       mountpoint.
+- [ ] **Set your default applications**, once the software is installed:
+
+      ./default-apps
+
+      Nothing arbitrates this on a bare WM: every application that can open
+      a PDF says so, and with no preference recorded the first match wins —
+      which is why PDFs open in GIMP. Run it after `extras`, so it can see
+      what you actually have.
 
 ---
 
