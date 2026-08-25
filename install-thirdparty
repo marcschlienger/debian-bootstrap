@@ -21,6 +21,30 @@ die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 APPS=(tailscale mullvad-browser cryptomator)
 
 # ---------------------------------------------------------------------------
+# Fetch a binary file to a path, byte for byte.
+#
+# Signing keys are BINARY gpg keyrings and must never pass through a shell
+# variable: command substitution strips NUL bytes and trailing newlines, and
+# printf then adds a newline that was not there. What lands on disk is not
+# what was downloaded, apt cannot verify the signature, and it reports
+# "the repository is not signed" — which reads like the vendor's problem and
+# is entirely ours.
+# ---------------------------------------------------------------------------
+fetch_to() { curl -fsSL -o "$2" "$1"; }
+
+# A 404 page is still a file. A binary OpenPGP public-key packet starts with
+# 0x98, 0x99 (old format) or 0xc6 (new format); HTML starts with '<'.
+looks_like_keyring() {
+  [[ -s "$1" ]] || return 1
+  local magic
+  magic="$(od -An -N1 -tx1 "$1" | tr -d ' \n')"
+  case "$magic" in
+    98|99|c6) return 0 ;;
+    *)        return 1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 ensure_flatpak() {
   if ! command -v flatpak >/dev/null; then
     say "Installing flatpak"
@@ -49,24 +73,39 @@ install_tailscale() {
   if [[ ! -f /etc/apt/sources.list.d/tailscale.list ]]; then
     say "Adding Tailscale repository for Debian $codename"
 
+    local tmpkey tmplist base="https://pkgs.tailscale.com/stable/debian"
+    tmpkey="$(mktemp)"  || die "mktemp failed"
+    tmplist="$(mktemp)" || { rm -f "$tmpkey"; die "mktemp failed"; }
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpkey' '$tmplist'" RETURN
+
     # Try the real fetch rather than a separate HEAD probe: some CDNs answer
     # HEAD differently from GET, which would make us wrongly report the
     # release as unpublished.
-    local key=""
-    if ! key="$(curl -fsSL "https://pkgs.tailscale.com/stable/debian/${codename}.noarmor.gpg")"; then
+    if ! fetch_to "${base}/${codename}.noarmor.gpg" "$tmpkey"; then
       warn "No Tailscale package repository for '$codename'."
       warn "This happens for a short while after a new Debian release."
       read -rp "Codename to use instead (e.g. bookworm), blank to abort: " codename || true
       [[ -n "${codename:-}" ]] || die "Aborted."
-      key="$(curl -fsSL "https://pkgs.tailscale.com/stable/debian/${codename}.noarmor.gpg")" \
-        || die "No repository for '$codename' either. Check https://pkgs.tailscale.com/stable/debian/"
+      fetch_to "${base}/${codename}.noarmor.gpg" "$tmpkey" \
+        || die "No repository for '$codename' either. Check ${base}/"
     fi
 
-    printf '%s\n' "$key" | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+    # Check the key before apt has to. Installing a bad one leaves you
+    # debugging "the repository is not signed" instead of a failed download.
+    looks_like_keyring "$tmpkey" \
+      || die "What was downloaded is not a GPG keyring. Check ${base}/${codename}.noarmor.gpg"
 
-    curl -fsSL "https://pkgs.tailscale.com/stable/debian/${codename}.tailscale-keyring.list" \
-      | sudo tee /etc/apt/sources.list.d/tailscale.list >/dev/null \
+    sudo install -m 0644 "$tmpkey" /usr/share/keyrings/tailscale-archive-keyring.gpg
+
+    # Same treatment for the sources list: piping curl into tee truncates the
+    # file first, so a failed fetch would leave an empty tailscale.list — and
+    # the guard above would then report the repo as "already configured" on
+    # every future run.
+    fetch_to "${base}/${codename}.tailscale-keyring.list" "$tmplist" \
       || die "Could not fetch the Tailscale sources list"
+    [[ -s "$tmplist" ]] || die "The Tailscale sources list downloaded empty."
+    sudo install -m 0644 "$tmplist" /etc/apt/sources.list.d/tailscale.list
 
     sudo apt-get update
   else
@@ -178,9 +217,22 @@ add_mullvad_repo() {
   fi
 
   say "Adding Mullvad repository"
-  sudo curl -fsSLo /usr/share/keyrings/mullvad-keyring.asc \
-    https://repository.mullvad.net/deb/mullvad-keyring.asc \
+
+  # This key is ASCII-armored, so it survives a pipe — but `curl -o` creates
+  # the destination before the transfer, so a failed download still leaves a
+  # truncated keyring behind, and apt's complaint for that is the same
+  # unhelpful "repository is not signed". Stage it, then install it.
+  local tmpkey
+  tmpkey="$(mktemp)" || die "mktemp failed"
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmpkey'" RETURN
+
+  fetch_to https://repository.mullvad.net/deb/mullvad-keyring.asc "$tmpkey" \
     || die "Could not fetch Mullvad signing key"
+  grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$tmpkey" \
+    || die "What was downloaded is not a PGP public key block."
+
+  sudo install -m 0644 "$tmpkey" /usr/share/keyrings/mullvad-keyring.asc
 
   echo "deb [signed-by=/usr/share/keyrings/mullvad-keyring.asc arch=$(dpkg --print-architecture)] https://repository.mullvad.net/deb/stable stable main" \
     | sudo tee /etc/apt/sources.list.d/mullvad.list >/dev/null
