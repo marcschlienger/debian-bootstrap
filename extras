@@ -78,11 +78,13 @@ GROUP_desktop=(
   gvfs gvfs-backends
   udiskie         # automount removable media
   wdisplays       # GUI display arrangement; kanshi handles the automatic case
-  wlsunset        # night light. Chosen over gammastep deliberately: no
-                  # config file, no location provider (so no geoclue to
-                  # allowlist), and -S/-s takes fixed times instead of
-                  # coordinates. gammastep's edge is its tray indicator,
-                  # which on sway costs you a tray. See guide §4.
+  gammastep       # night light. Chosen over wlsunset for two capabilities
+                  # wlsunset does not have at all: -O sets a temperature
+                  # on demand (wlsunset is daemon-only, so no keybinding
+                  # is possible), and -b dims the screen in software below
+                  # what the backlight alone reaches. It also takes a
+                  # config file, which belongs in a dotfiles repo far
+                  # better than flags buried in a sway config. See §4.
   pavucontrol     # when nmtui-style TUI isn't enough for audio routing
 )
 
@@ -696,32 +698,61 @@ fi
 if [[ " ${SELECTED[*]} " == *" desktop "* ]]; then
   cat <<'EOF'
 
-Night light: wlsunset is installed. Add one line to your sway config —
+Night light: gammastep is installed. It needs a config file and one exec
+line; neither is written for you, because both belong in your dotfiles.
 
-  exec wlsunset -S 07:00 -s 21:00 -t 3800 -T 6500
+  ~/.config/gammastep/config.ini
+
+    [general]
+    temp-day=6500
+    temp-night=3800
+    brightness-day=1.0
+    brightness-night=0.85
+    fade=1
+    adjustment-method=wayland
+    dawn-time=6:30-7:45
+    dusk-time=20:15-21:30
 
   Fixed times, so there is no location to configure and nothing to correct
-  if you travel. With coordinates instead, if you prefer real sunset:
+  if you travel. dawn-time and dusk-time must BOTH be set or neither.
+  For real sunset times instead, drop them and add:
 
-  exec wlsunset -l 52.5 -L 13.4 -t 3800 -T 6500
+    location-provider=manual
 
-  -l is latitude, -L is longitude. Transposing them is the usual mistake.
+    [manual]
+    lat=52.5
+    lon=13.4
 
-If you would rather have gammastep — config file, tray indicator — it is a
-straight swap, but read guide §4 first:
+  In your sway config:
+
+    exec gammastep
+
+    # on demand, whatever the hour — these exit immediately, so they do
+    # not fight the running daemon
+    bindsym $mod+Shift+n exec gammastep -O 3500
+    bindsym $mod+Shift+m exec gammastep -x
+
+brightness-night is the part people miss: on a laptop panel in a dark room
+the backlight minimum is often still too bright, and this dims below it in
+software. Valid range is 0.1 to 1.0; below about 0.7 looks murky.
+
+Three things that waste an evening, all in guide §4:
 
   - `systemctl --user enable --now gammastep` fails on Debian. The package
-    ships no systemd user unit, whatever the internet tells you.
-  - Its geoclue2 provider needs an allowlist entry in
-    /etc/geoclue/geoclue.conf and does nothing without one. Use `manual`.
-  - Only run ONE of them: wlroots gives gamma control to a single client.
+    ships no systemd user unit, whatever the internet says. Start it from
+    your sway config.
+  - Do not use the geoclue2 location provider. It needs an allowlist entry
+    in /etc/geoclue/geoclue.conf and does nothing without one.
   - redshift is the X11 original. Under sway it installs perfectly cleanly
     and does nothing at all.
 
-An `exec` line for a binary you have not installed fails silently — sway's
+wlsunset is the simpler alternative if you only want the automatic shift —
+one line, no config file, but no -O and no brightness control.
+
+An `exec` line for a binary you have not installed fails silently: sway's
 stderr is gone once it takes the tty. Check the binary first:
 
-  command -v wlsunset gammastep
+  command -v gammastep
 
 EOF
 fi

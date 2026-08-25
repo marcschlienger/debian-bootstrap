@@ -378,19 +378,37 @@ Two tools, both in Debian, both tiny. Pick one — wlroots hands
 `wlr-gamma-control` to a single client at a time, so running both means the
 second one silently gets nothing.
 
-**wlsunset is the one in `extras desktop`**, and the reason is the shape of
-the thing rather than the feature list: no config file, no location
-provider, and therefore no geoclue to allowlist and nothing to correct if
-you move. gammastep's real differentiator is its tray indicator, and on
-sway a tray is itself a project (§10) — so its advantage costs setup rather
-than saving it.
+**gammastep is the one in `extras desktop`**, for two capabilities wlsunset
+does not have at all — not for the tray indicator, which on sway costs you
+a tray (§10) and is no advantage here:
+
+| | gammastep | wlsunset |
+|---|---|---|
+| Automatic shift by sunset | yes | yes |
+| Fixed times instead of coordinates | `dawn-time`/`dusk-time` | `-S`/`-s` |
+| **Set a temperature on demand** | **`-O TEMP`** | no — daemon only |
+| **Reduce brightness at night** | **`-b DAY:NIGHT`** | no |
+| Config file | `-c FILE` | no, flags only |
+
+`-O` is what makes a keybinding possible: wlsunset has no manual mode, so
+"warm the screen now" is not something it can do at all. `-b` dims in
+software below the backlight's minimum, which on a laptop panel in a dark
+room is the difference that actually matters.
+
+The usual arguments against gammastep — geoclue, the missing systemd unit —
+are arguments against its *defaults*, not against the program. Set
+`location-provider=manual` or fixed times and start it from your sway
+config, and neither applies.
+
+wlsunset remains the better answer if all you want is the automatic shift:
+one line, no config file, nothing to maintain.
 
 ```bash
-# wlsunset — no config file, everything on the command line
-exec wlsunset -l 52.5 -L 13.4 -t 3800 -T 6500
-
-# gammastep — automatic, config file, optional tray indicator
+# gammastep — config file below, plus keybindings for on-demand shifts
 exec gammastep
+
+# wlsunset — the whole setup, if you want nothing else
+exec wlsunset -l 52.5 -L 13.4 -t 3800 -T 6500
 ```
 
 `-l` is latitude and `-L` is longitude; transposing them is the usual
@@ -417,20 +435,35 @@ exec wlsunset -S 07:00 -s 21:00 -t 3800 -T 6500
   and without that it gets no location and does nothing. `manual` with
   coordinates is one line and needs no daemon.
 
-A minimal `~/.config/gammastep/config.ini`, if you go that way:
+`~/.config/gammastep/config.ini`, with fixed times so there is no location
+to configure and nothing to correct if you travel. `dawn-time` and
+`dusk-time` must both be set or neither:
 
 ```ini
 [general]
 temp-day=6500
 temp-night=3800
+brightness-day=1.0
+brightness-night=0.85
 fade=1
-location-provider=manual
 adjustment-method=wayland
+dawn-time=6:30-7:45
+dusk-time=20:15-21:30
+```
+
+For real sunset times instead, drop the two time lines and add a location.
+Manual coordinates, never geoclue:
+
+```ini
+location-provider=manual
 
 [manual]
 lat=52.5
 lon=13.4
 ```
+
+`brightness-night` is the setting people miss. Valid range is 0.1 to 1.0;
+below roughly 0.7 the screen starts to look murky rather than dim.
 
 For on-demand shifts, either tool's one-shot mode makes a good keybinding
 and exits immediately, so it does not conflict with a running daemon:
