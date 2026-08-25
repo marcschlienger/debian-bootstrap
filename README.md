@@ -22,7 +22,7 @@ The design bet, in three lines:
 | [`debian-sway-guide.md`](debian-sway-guide.md) | The reference. Why each choice was made and what breaks when it's made differently. INSTALL.md links into its sections. |
 | [`bootstrap-sway`](bootstrap-sway) | Installs the desktop: compositor, session plumbing, portals, audio, fonts, hardware bits. Generates the `start-sway` wrapper and the portal drop-in. |
 | [`extras`](extras) | Optional software in named groups — `cli`, `editors`, `lsp`, `cpp`, `python`, `desktop`, `office`, `media`, `container`, and more. Nothing here is required for the desktop to work. |
-| [`install-thirdparty`](install-thirdparty) | The three applications Debian doesn't ship: Tailscale, Mullvad Browser, Cryptomator. Each uses a different channel; the rationale is documented per app. |
+| [`install-thirdparty`](install-thirdparty) | The applications Debian doesn't ship: Tailscale, Mullvad Browser, Cryptomator, yazi. Each uses a different channel, and the rationale — including what can and cannot be verified — is documented per app. |
 | [`appimage-manage`](appimage-manage) | Puts an AppImage on `$PATH`, in fuzzel, and in your icon theme, using the `.desktop` file and icon already inside it. Also diagnoses the libfuse2 failure. |
 | [`deploy-dotfiles`](deploy-dotfiles) | Clones the dotfiles repo to `~/.dotfiles` and stows it, moving Debian's own `~/.bashrc`/`~/.profile` aside first so stow doesn't abort. Idempotent; `--list`, `--dry-run` and `--delete` do what you'd expect. |
 | [`build-emacs`](build-emacs) | Builds Emacs (pgtk, native-comp, tree-sitter) into a GNU Stow prefix, so versions stay trackable and removable. Check `apt policy emacs-pgtk` first — you may not need it. |

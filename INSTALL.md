@@ -155,6 +155,16 @@ Run all of these. Fix anything that fails *now*.
 
       ./extras desktop office media docs sync
 
+- [ ] **yazi**, if you want the terminal file manager — it isn't in Debian
+      at all, so it comes from `install-thirdparty` rather than `extras`:
+
+      ./install-thirdparty yazi
+
+      Upstream runs its own signed apt repository, so this is a normal
+      packaged install and apt keeps it current afterwards. It also installs
+      the tools yazi shells out to for previews — without them the panes are
+      simply empty, with no error.
+
 - [ ] **Containers**, for building against your Ubuntu servers:
 
       ./extras container

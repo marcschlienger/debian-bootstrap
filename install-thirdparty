@@ -18,7 +18,7 @@ say()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
-APPS=(tailscale mullvad-browser cryptomator)
+APPS=(tailscale mullvad-browser cryptomator yazi)
 
 # ---------------------------------------------------------------------------
 # First installable name from a list.
@@ -290,7 +290,7 @@ EOF
 #
 # No jq: it is not installed on a minimal system, and this needs two fields.
 # ---------------------------------------------------------------------------
-CRYPTOMATOR_API="https://api.github.com/repos/cryptomator/cryptomator/releases/latest"
+gh_latest() { curl -fsSL "https://api.github.com/repos/$1/releases/latest" || true; }
 
 json_asset_url() {  # $1 = release json, $2 = suffix to match
   printf '%s' "$1" \
@@ -371,7 +371,7 @@ EOF
     3)
       local json tag deburl debpath dldir="${XDG_DOWNLOAD_DIR:-$HOME/Downloads}"
       say "Looking up the latest Cryptomator release"
-      json="$(curl -fsSL "$CRYPTOMATOR_API" || true)"
+      json="$(gh_latest cryptomator/cryptomator)"
       [[ -n "$json" ]] || die "Could not reach the GitHub releases API."
       tag="$(json_tag "$json")"
       deburl="$(json_asset_url "$json" "_amd64\\.deb")"
@@ -441,7 +441,7 @@ EOF
         warn "No Cryptomator AppImage is published for '$arch'."
       else
         say "Looking up the latest Cryptomator release"
-        json="$(curl -fsSL "$CRYPTOMATOR_API" || true)"
+        json="$(gh_latest cryptomator/cryptomator)"
         if [[ -z "$json" ]]; then
           warn "Could not reach the GitHub releases API."
         else
@@ -522,6 +522,97 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# yazi — not in Debian's archive, in any suite, but upstream runs a signed
+# APT repository of its own.
+#
+# That makes it the same shape as Tailscale and Mullvad: a real repo, a real
+# signature, and apt keeps it current afterwards. Prefer it over the .deb
+# assets on the GitHub release page, which carry no signature or checksum at
+# all, and over `cargo install`, which pins you to a build you then have to
+# remember to redo.
+#
+# Two channels are published, stable and nightly. Stable, obviously.
+# ---------------------------------------------------------------------------
+YAZI_REPO_BASE="https://yazi-rs.github.io/builds"
+
+install_yazi() {
+  if [[ ! -f /etc/apt/sources.list.d/yazi.list ]]; then
+    say "Adding the yazi repository"
+
+    local tmpkey
+    tmpkey="$(mktemp)" || die "mktemp failed"
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpkey'" RETURN
+
+    fetch_to "${YAZI_REPO_BASE}/yazi-keyring.gpg" "$tmpkey" \
+      || die "Could not fetch the yazi signing key"
+    looks_like_keyring "$tmpkey" \
+      || die "What was downloaded is not a GPG keyring. Check ${YAZI_REPO_BASE}/"
+
+    # Worth an eyeball the first time. Upstream publishes this fingerprint in
+    # its installation docs; if it does not match, stop.
+    if command -v gpg >/dev/null; then
+      say "Key in that file"
+      gpg --show-keys --with-colons "$tmpkey" 2>/dev/null \
+        | awk -F: '/^fpr/{print "  "$10} /^uid/{print "  "$10}' | head -4
+    fi
+
+    sudo install -m 0644 "$tmpkey" /usr/share/keyrings/yazi-keyring.gpg
+
+    echo "deb [signed-by=/usr/share/keyrings/yazi-keyring.gpg] ${YAZI_REPO_BASE}/ stable main" \
+      | sudo tee /etc/apt/sources.list.d/yazi.list >/dev/null
+
+    sudo apt-get update
+  else
+    say "yazi repository already configured"
+  fi
+
+  say "Installing yazi"
+  sudo apt-get install -y yazi
+
+  # --- Companions.
+  #
+  # yazi degrades silently without these: no previews, no image thumbnails,
+  # no clipboard. Nothing errors, the panes are just empty, which reads like
+  # a broken install rather than a missing helper.
+  say "Checking the tools yazi shells out to"
+  local want=(file ffmpegthumbnailer poppler-utils wl-clipboard jq fd-find ripgrep fzf zoxide imagemagick p7zip-full)
+  local missing=() p
+  for p in "${want[@]}"; do
+    dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p")
+  done
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    say "All present."
+  else
+    warn "Missing: ${missing[*]}"
+    local r=""
+    read -rp "Install them? [Y/n] " r || true
+    if [[ "${r:-y}" != [Nn]* ]]; then
+      sudo apt-get install -y "${missing[@]}" || warn "Some packages failed; see apt output"
+    fi
+  fi
+
+  cat <<'EOF'
+
+  Updates come through apt from now on, along with everything else.
+
+  Debian naming quirk that will bite you: fd is `fdfind` here and bat is
+  `batcat`. Your shell aliases do not help — yazi execs these directly, so
+  the names have to be right in yazi.toml or filtering and previews quietly
+  do nothing.
+
+  Wayland clipboard integration comes from wl-clipboard. Without it, yanking
+  a path inside yazi never reaches the rest of your session.
+
+  If you ever want the bleeding edge, upstream also publishes a nightly
+  channel at the same base URL — a second sources.list entry with `nightly`
+  in place of `stable`, then `apt install -t nightly yazi`.
+
+EOF
+}
+
+# ---------------------------------------------------------------------------
 if [[ $# -eq 0 ]]; then
   echo "Usage: $0 [--list] [--all] <app>..."; exit 1
 fi
@@ -551,6 +642,7 @@ for app in "${UNIQUE[@]}"; do
     tailscale)       install_tailscale ;;
     mullvad-browser) install_mullvad_browser ;;
     cryptomator)     install_cryptomator ;;
+    yazi)            install_yazi ;;
   esac
 done
 
