@@ -152,6 +152,83 @@ EOF
     fi
   fi
 
+  # ---------------------------------------------------------------------------
+  # Verify DNS before telling anyone to run `tailscale up`.
+  #
+  # `systemctl enable --now` can return without the service actually being up,
+  # and installing systemd-resolved repoints /etc/resolv.conf at the stub
+  # resolver on 127.0.0.53. If nothing is listening there, every lookup fails
+  # while routing stays perfectly fine — ping works, nmtui looks healthy, no
+  # name resolves. Observed on this exact path; a reboot fixed it, which is
+  # what "the service was never running" looks like from the outside.
+  #
+  # It matters here specifically because `tailscale up` prints an auth URL you
+  # have to open in a browser. Broken DNS at that moment means you cannot
+  # complete the step the script is about to tell you to perform.
+  # ---------------------------------------------------------------------------
+  dns_works() {
+    # getent goes through the system resolver, which is the thing under test
+    # — unlike dig, which can be pointed elsewhere and would happily pass
+    # while everything else on the machine still fails.
+    #
+    # curl is the fallback rather than the primary, but it must be a fallback
+    # and not the only test: a check that reports "broken" because its own
+    # tool is missing would block an install that was working fine.
+    if command -v getent >/dev/null; then
+      getent hosts deb.debian.org  >/dev/null 2>&1 && return 0
+      getent hosts one.one.one.one >/dev/null 2>&1 && return 0
+    fi
+    if command -v curl >/dev/null; then
+      curl -fsS --max-time 5 -o /dev/null https://deb.debian.org/ 2>/dev/null && return 0
+    fi
+    return 1
+  }
+
+  if ! command -v getent >/dev/null && ! command -v curl >/dev/null; then
+    warn "No getent and no curl — cannot test name resolution, skipping the check."
+  elif ! dns_works; then
+    warn "Name resolution is not working right now."
+
+    if systemctl list-unit-files systemd-resolved.service >/dev/null 2>&1 \
+       && ! systemctl is-active --quiet systemd-resolved; then
+      warn "systemd-resolved is installed but not running, and /etc/resolv.conf"
+      warn "almost certainly points at its stub on 127.0.0.53 — so there is"
+      warn "nothing listening where every lookup is being sent."
+      r=""
+      read -rp "Start it now? [Y/n] " r || true
+      if [[ "${r:-y}" != [Nn]* ]]; then
+        sudo systemctl enable --now systemd-resolved || warn "could not start it"
+        sleep 1
+      fi
+    fi
+
+    if dns_works; then
+      say "Resolution is working now."
+    else
+      cat <<'EOF'
+
+  STOPPING HERE. Tailscale is installed, but `tailscale up` prints a URL you
+  must open in a browser, and no browser will resolve anything right now.
+
+  Look at, in this order:
+
+    systemctl is-active systemd-resolved
+    resolvectl status | head -20
+    cat /etc/resolv.conf
+    nmcli device show | grep -i dns
+
+  A stub at 127.0.0.53 with a dead systemd-resolved is the usual cause, and
+  a reboot clears it. Then re-run this script.
+
+  Or ignore all of it for now: the auth URL opens on any device. Run
+  `sudo tailscale up --operator=$USER` here, and open the URL it prints on
+  your phone. Nothing needs to resolve on this machine for that to work.
+
+EOF
+      exit 1
+    fi
+  fi
+
   sudo systemctl enable --now tailscaled
 
   # There are reports on Trixie of the daemon not coming up after apt install
