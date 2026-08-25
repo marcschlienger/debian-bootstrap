@@ -662,16 +662,47 @@ EOF
 fi
 
 if [[ " ${SELECTED[*]} " == *" cli "* ]]; then
+  # Debian renames these two to avoid collisions with existing packages, and
+  # an alias is the wrong fix: aliases are a shell feature, so anything that
+  # execs `fd` or `bat` directly — yazi's search, a script, an editor plugin
+  # — never sees them and silently does nothing. Symlinks on PATH fix it for
+  # everything, including the shell.
+  say "Linking Debian's renamed binaries onto PATH"
+  mkdir -p ~/.local/bin
+
+  link_renamed() {
+    local real="$1" want="$2" target
+    if ! target="$(command -v "$real" 2>/dev/null)"; then
+      warn "  $real is not installed; skipping $want"
+      return 0
+    fi
+    if [[ -e "$HOME/.local/bin/$want" && ! -L "$HOME/.local/bin/$want" ]]; then
+      warn "  ~/.local/bin/$want exists and is not a symlink — leaving it alone."
+      return 0
+    fi
+    ln -sf "$target" "$HOME/.local/bin/$want"
+    printf '  %s -> %s\n' "$want" "$target"
+  }
+
+  link_renamed fdfind fd
+  link_renamed batcat bat
+
+  # The links are useless if that directory is not on PATH, and on a fresh
+  # account it often is not until the next login.
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) warn "~/.local/bin is not on your PATH in this shell."
+       warn "zsh picks it up from ~/.zshenv, bash from ~/.profile — log out and back in." ;;
+  esac
+
   cat <<'EOF'
 
-Debian renames two binaries to avoid collisions. Add to ~/.zshrc:
+Shell integration to add to ~/.zshrc:
 
-  alias fd='fdfind'
-  alias bat='batcat'
   eval "$(zoxide init zsh)"
   eval "$(direnv hook zsh)"
 
-  (For bash, the last two become `zoxide init bash` / `direnv hook bash`.)
+  (For bash, those become `zoxide init bash` / `direnv hook bash`.)
 
   If ~/.zshrc is a stow symlink into your dotfiles repo, that is where these
   belong — commit them there rather than appending through the link.
