@@ -538,7 +538,16 @@ if [[ $TTY_AUTOSTART -eq 1 ]]; then
   # Append to the file bash ACTUALLY reads at login. Creating ~/.bash_profile
   # where none existed stops bash reading ~/.profile — which is precisely what
   # puts ~/.local/bin (and therefore start-sway) on PATH.
-  if [[ -f ~/.bash_profile ]]; then
+  # Which file your login shell ACTUALLY reads. zsh reads none of bash's
+  # three, so once `./extras shell` has changed your shell, appending to
+  # ~/.profile is silently useless — sway just stops starting on tty1.
+  # $SHELL is inherited from whatever launched this script and proves
+  # nothing; the passwd entry is the only authoritative record.
+  LOGIN_SHELL="$(getent passwd "$USER" | cut -d: -f7 || true)"
+
+  if [[ "$LOGIN_SHELL" == */zsh ]]; then
+    PROFILE=~/.zprofile          # zsh's login file
+  elif [[ -f ~/.bash_profile ]]; then
     PROFILE=~/.bash_profile
   elif [[ -f ~/.bash_login ]]; then
     PROFILE=~/.bash_login

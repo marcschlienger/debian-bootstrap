@@ -684,12 +684,18 @@ fi
 if [[ " ${SELECTED[*]} " == *" cli "* ]]; then
   cat <<'EOF'
 
-Debian renames two binaries to avoid collisions. Add to your shell rc:
+Debian renames two binaries to avoid collisions. Add to ~/.zshrc:
 
   alias fd='fdfind'
   alias bat='batcat'
-  eval "$(zoxide init bash)"     # or zsh
-  eval "$(direnv hook bash)"
+  eval "$(zoxide init zsh)"
+  eval "$(direnv hook zsh)"
+
+  (For bash, the last two become `zoxide init bash` / `direnv hook bash`.)
+
+  If ~/.zshrc is a stow symlink into your dotfiles repo, that is where these
+  belong — not appended through the link. Note that ~/.zsh/plugins.zsh is
+  NOT the place: `./extras shell` regenerates it.
 
 EOF
 fi
