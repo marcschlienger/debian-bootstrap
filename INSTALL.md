@@ -151,6 +151,15 @@ Run all of these. Fix anything that fails *now*.
       Say yes when it offers to mirror the sway autostart into `~/.zprofile`.
       zsh does not read `~/.profile`, which is where `--tty-autostart` put it.
 
+- [ ] **Spell checking**, for Emacs — English and German:
+
+      ./extras spell
+
+      The `office` group installs the dictionaries but not the `hunspell`
+      binary, because LibreOffice links the library and never needs it.
+      Emacs execs it, so without this group spell checking fails with an
+      error naming ispell, which sends you looking in the wrong place.
+
 - [ ] **Desktop and documents:**
 
       ./extras desktop office media docs sync

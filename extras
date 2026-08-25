@@ -61,6 +61,17 @@ GROUP_shell=(
   # dotfiles repo looks for them.
 )
 
+# Spell checking. The dictionaries also appear in `office`, because
+# LibreOffice wants them too — but LibreOffice links libhunspell internally
+# and never needs the binary, which is why installing `office` alone leaves
+# Emacs with no working spell check and no obvious reason why.
+GROUP_spell=(
+  hunspell          # the binary — this is the bit Emacs actually execs
+  hunspell-en-us
+  hunspell-de-de
+  # hunspell-en-gb   # add if you write British English
+)
+
 # GUI odds and ends that a bare WM leaves you without.
 GROUP_desktop=(
   thunar          # file manager (pulls some xfce libs, unavoidable)
@@ -212,7 +223,7 @@ GROUP_flatpak=(
   # Adds flathub remote afterwards — see post-install hook.
 )
 
-ALL_GROUPS=(cli shell editors lsp cpp python go desktop office media docs sync container security backup browser virt flatpak)
+ALL_GROUPS=(cli shell editors spell lsp cpp python go desktop office media docs sync container security backup browser virt flatpak)
 
 # ---------------------------------------------------------------------------
 DRY_RUN=0
@@ -262,6 +273,16 @@ for g in "${SELECTED[@]}"; do
   declare -n ref="GROUP_$g"
   WANTED+=("${ref[@]}")
 done
+
+# Groups overlap on purpose — the dictionaries belong to both `spell` and
+# `office` — so drop duplicates rather than listing a package twice and
+# passing it to apt twice.
+DEDUPED=()
+for p in "${WANTED[@]}"; do
+  case " ${DEDUPED[*]-} " in *" $p "*) continue ;; esac   # -: empty array under set -u
+  DEDUPED+=("$p")
+done
+WANTED=("${DEDUPED[@]}")
 
 say "Refreshing package lists"
 [[ $DRY_RUN -eq 0 ]] && sudo apt-get update -qq
@@ -478,6 +499,60 @@ Editors installed. Two things worth knowing:
   For a source build with your own configure flags, use build-emacs.
   It installs into a GNU Stow prefix so it stays removable.
 
+  Spell checking is a separate group — Emacs needs the hunspell BINARY,
+  which `office` does not install even though it installs the dictionaries:
+    ./extras spell
+
+EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" spell "* ]]; then
+  say "Checking hunspell"
+
+  if ! command -v hunspell >/dev/null; then
+    warn "hunspell is not on PATH — apt must have skipped it."
+  else
+    # -D lists the search paths and every dictionary found. This is the one
+    # diagnostic worth knowing: Emacs reports a missing dictionary as an
+    # ispell error, which reads like an Emacs problem rather than a missing
+    # Debian package.
+    say "Dictionaries hunspell can see"
+    # Only the paths: hunspell also prints a "Can't open ... dictionary named
+    # default" line here, which is just it complaining that no -d was given.
+    hunspell -D </dev/null 2>&1 | sed -n '/AVAILABLE DICTIONARIES/,$p' | grep '^/' | sed 's/^/  /' \
+      || warn "hunspell reported no dictionaries at all"
+
+    for d in en_US de_DE; do
+      if hunspell -D </dev/null 2>&1 | grep -q "/${d}$"; then
+        printf '  ok      %s\n' "$d"
+      else
+        printf '  MISSING %s\n' "$d"
+      fi
+    done
+  fi
+
+  cat <<'EOF'
+
+Emacs does not find hunspell on its own — it looks for ispell first, and
+the error when it fails names ispell, not hunspell. Put this in your init:
+
+  (setq ispell-program-name "hunspell")
+  (with-eval-after-load 'ispell
+    (setq ispell-really-hunspell t)
+    ;; Order matters: params first, then register the combined dictionary,
+    ;; then select it. Setting ispell-dictionary before the multi-dic is
+    ;; registered leaves flyspell checking one language only.
+    (ispell-set-spellchecker-params)
+    (ispell-hunspell-add-multi-dic "en_US,de_DE")
+    (setq ispell-dictionary "en_US,de_DE"))
+
+That checks both languages in the same buffer, which is what you want for
+mixed German and English prose. To switch to one language for a buffer:
+
+  M-x ispell-change-dictionary RET de_DE RET
+
+Then M-x flyspell-mode, or flyspell-prog-mode in code buffers.
+
 EOF
 fi
 
@@ -691,7 +766,7 @@ if [[ " ${SELECTED[*]} " == *" cli "* ]]; then
   # account it often is not until the next login.
   case ":$PATH:" in
     *":$HOME/.local/bin:"*) ;;
-    *) warn "~/.local/bin is not on your PATH in this shell."
+    *) warn "Note: ~/.local/bin is not on your PATH in this shell."
        warn "zsh picks it up from ~/.zshenv, bash from ~/.profile — log out and back in." ;;
   esac
 
