@@ -282,9 +282,57 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Cryptomator — no Debian package, and the PPA is Ubuntu-only.
+# Resolve a Cryptomator release asset without hardcoding a version.
 #
-# Two viable channels, with a real tradeoff:
+# Upstream's download page puts the version in the URL, which is why this
+# script used to say "download it yourself and tell me the path". The
+# releases API gives the current version instead, so nothing here rots.
+#
+# No jq: it is not installed on a minimal system, and this needs two fields.
+# ---------------------------------------------------------------------------
+CRYPTOMATOR_API="https://api.github.com/repos/cryptomator/cryptomator/releases/latest"
+
+json_asset_url() {  # $1 = release json, $2 = suffix to match
+  printf '%s' "$1" \
+    | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${2}\"" \
+    | head -1 | cut -d'"' -f4
+}
+
+json_tag() {
+  printf '%s' "$1" | grep -o '"tag_name\"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | head -1 | cut -d'"' -f4
+}
+
+# Verify a detached signature, and do NOT quietly continue when it fails.
+# A signature you cannot check is worth more as a stop than as a warning.
+verify_detached() {
+  local file="$1" sig="$2" out
+  if ! command -v gpg >/dev/null; then
+    warn "gpg is not installed, so the signature cannot be checked."
+    warn "  sudo apt install gnupg"
+  elif out="$(gpg --verify "$sig" "$file" 2>&1)"; then
+    say "Signature verified"
+    printf '%s\n' "$out" | sed 's/^/    /'
+    return 0
+  else
+    warn "Signature NOT verified:"
+    printf '%s\n' "$out" | sed 's/^/    /'
+    echo
+    echo "  If it says 'No public key', you do not have Cryptomator's key yet."
+    echo "  Take the fingerprint from https://cryptomator.org/downloads/ and"
+    echo "  compare it before importing — a key fetched to check a file it"
+    echo "  signed proves nothing on its own."
+    echo
+  fi
+  local r=""
+  read -rp "Continue with an unverified file? [y/N] " r || true
+  [[ "${r:-}" == [Yy]* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Cryptomator — not in Debian's archive.
+#
+# Three channels, with a real tradeoff:
 #
 #   AppImage (upstream's recommended route)
 #     + Full filesystem access, so vaults on external drives and mounted
@@ -298,8 +346,16 @@ EOF
 #       drives and other mount points not being visible.
 #     - The manifest declares X11, so it runs under XWayland.
 #
-# Given you'll likely keep vaults in a Nextcloud folder under $HOME, either
-# works. If any vault lives on an external disk, take the AppImage.
+#   .deb from the release page (signed, but built for the Ubuntu PPA)
+#     + Real package: dpkg owns it, launcher and icon come with it, no
+#       libfuse2 dance.
+#     - Versioned 0ppa1 and built against Ubuntu, so its dependencies are
+#       not guaranteed to resolve on Debian stable. Try it; if apt starts
+#       proposing removals, back out and take the AppImage.
+#     - Not in a repository, so updates are still manual.
+#
+# Given you'll likely keep vaults in a Nextcloud folder under $HOME, any of
+# them works. If a vault lives on an external disk, avoid the Flatpak.
 # ---------------------------------------------------------------------------
 install_cryptomator() {
   say "Cryptomator — choose a channel"
@@ -307,10 +363,40 @@ install_cryptomator() {
 
   1) AppImage  — full filesystem access, manual updates  (upstream default)
   2) Flatpak   — auto updates, sandboxed, XWayland, limited to $HOME
+  3) .deb      — real package, but built for the Ubuntu PPA
 
 EOF
-  read -rp "Which? [1/2] " choice || true
+  read -rp "Which? [1/2/3] " choice || true
   case "${choice:-}" in
+    3)
+      local json tag deburl debpath dldir="${XDG_DOWNLOAD_DIR:-$HOME/Downloads}"
+      say "Looking up the latest Cryptomator release"
+      json="$(curl -fsSL "$CRYPTOMATOR_API" || true)"
+      [[ -n "$json" ]] || die "Could not reach the GitHub releases API."
+      tag="$(json_tag "$json")"
+      deburl="$(json_asset_url "$json" "_amd64\\.deb")"
+      [[ -n "$deburl" ]] || die "No .deb asset in release ${tag:-latest}."
+
+      mkdir -p "$dldir"
+      debpath="$dldir/$(basename "$deburl")"
+      say "Downloading ${tag:-latest}"
+      fetch_to "$deburl" "$debpath" || die "Download failed"
+      fetch_to "${deburl}.asc" "${debpath}.asc" \
+        || warn "Could not fetch the signature"
+      if [[ -f "${debpath}.asc" ]]; then
+        verify_detached "$debpath" "${debpath}.asc" \
+          || die "Stopping. The file is at $debpath if you want to check it yourself."
+      fi
+
+      # apt, not dpkg: it resolves dependencies instead of leaving you in a
+      # half-configured state to untangle by hand.
+      say "Installing $debpath"
+      sudo apt-get install -y "$debpath" || {
+        warn "apt refused it — most likely an Ubuntu-only dependency."
+        warn "Nothing was changed. Re-run and choose 1 for the AppImage."
+        exit 1
+      }
+      ;;
     2)
       ensure_flatpak
       say "Installing Cryptomator from Flathub"
@@ -339,31 +425,82 @@ EOF
         warn "Type-2 AppImages will need --appimage-extract-and-run."
       fi
 
-      cat <<'EOF'
+      # --- Fetch it, rather than asking for the path to a file you have had
+      #     no opportunity to download.
+      local arch aiarch json tag aiurl ascurl dldir aipath=""
+      dldir="${XDG_DOWNLOAD_DIR:-$HOME/Downloads}"
 
-  Download the AppImage manually — the URL contains a version number that
-  changes with each release, so scripting it would silently rot:
+      arch="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+      case "$arch" in
+        amd64) aiarch=x86_64 ;;
+        arm64) aiarch=aarch64 ;;
+        *)     aiarch="" ;;
+      esac
 
-    https://cryptomator.org/downloads/linux/
+      if [[ -z "$aiarch" ]]; then
+        warn "No Cryptomator AppImage is published for '$arch'."
+      else
+        say "Looking up the latest Cryptomator release"
+        json="$(curl -fsSL "$CRYPTOMATOR_API" || true)"
+        if [[ -z "$json" ]]; then
+          warn "Could not reach the GitHub releases API."
+        else
+          tag="$(json_tag "$json")"
+          aiurl="$(json_asset_url "$json" "-${aiarch}\\.AppImage")"
+          ascurl="$(json_asset_url "$json" "-${aiarch}\\.AppImage\\.asc")"
+        fi
 
-  Verify it before running. Cryptomator publishes a .asc signature and their
-  signing key is on that page:
+        if [[ -n "${aiurl:-}" ]]; then
+          echo
+          echo "  Latest release: ${tag:-unknown}"
+          echo "  $aiurl"
+          echo "  Downloads to:   $dldir"
+          echo
+          local r=""
+          read -rp "Download it now? [Y/n] " r || true
+          if [[ "${r:-y}" != [Nn]* ]]; then
+            mkdir -p "$dldir"
+            aipath="$dldir/$(basename "$aiurl")"
+            if [[ -f "$aipath" ]]; then
+              say "Already downloaded: $aipath"
+            else
+              fetch_to "$aiurl" "$aipath" || { warn "Download failed"; aipath=""; }
+            fi
 
-    gpg --verify cryptomator-*.AppImage.asc cryptomator-*.AppImage
+            if [[ -n "$aipath" && -n "${ascurl:-}" ]]; then
+              fetch_to "$ascurl" "${aipath}.asc" \
+                || warn "Could not fetch the signature"
+              if [[ -f "${aipath}.asc" ]]; then
+                verify_detached "$aipath" "${aipath}.asc" || {
+                  warn "Stopping. The file is at $aipath if you want to check it yourself."
+                  aipath=""
+                }
+              fi
+            fi
+          fi
+        else
+          warn "Could not find an AppImage asset in the latest release."
+          echo "  Grab it by hand from https://cryptomator.org/downloads/linux/"
+        fi
+      fi
 
-EOF
-      read -rp "Path to the downloaded AppImage (blank to skip integration): " aipath || true
+      # Fall back to a file you already have.
+      if [[ -z "$aipath" ]]; then
+        read -rp "Path to an AppImage you already downloaded (blank to skip): " aipath || true
+        [[ -z "${aipath:-}" ]] || [[ -f "${aipath:-}" ]] || die "Not found: $aipath"
+      fi
+
       if [[ -n "${aipath:-}" ]]; then
-        [[ -f "${aipath:-}" ]] || die "Not found: $aipath"
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         if [[ -x "$SCRIPT_DIR/appimage-manage" ]]; then
-          "$SCRIPT_DIR/appimage-manage" install "${aipath:-}" --name cryptomator
+          "$SCRIPT_DIR/appimage-manage" install "$aipath" --name cryptomator
         else
-          warn "appimage-manage not found next to this script."
-          warn "Run it manually to get a launcher entry and PATH symlink."
+          warn "appimage-manage is not executable next to this script."
+          warn "  chmod +x appimage-manage"
+          warn "  ./appimage-manage install '$aipath' --name cryptomator"
         fi
       else
-        warn "Skipped. Once downloaded, integrate with:"
+        warn "Skipped. Once you have the file:"
         warn "  ./appimage-manage install <file> --name cryptomator"
       fi
       ;;
