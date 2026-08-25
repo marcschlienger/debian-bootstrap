@@ -8,7 +8,8 @@ The design bet, in three lines:
 
 - **Base system boring and frozen** — Debian stable, no testing/sid mixing.
 - **Freshness layered on top, only where it's needed** — Flatpak for the
-  browser, Nix for CLI tooling.
+  browser, which `extras` sets up; Nix for current CLI tooling, which it
+  deliberately doesn't. See guide §6 and install it when you want it.
 - **Minimality by package selection, not dependency suppression** — you install
   `sway`, not a desktop task, and Recommends stay on because Debian Policy
   treats them as strong dependencies.
