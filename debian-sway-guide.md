@@ -1352,6 +1352,12 @@ sudo tlp-stat -b          # battery, thresholds
 sudo powertop             # what's consuming
 cat /sys/power/mem_sleep
 
+# Network — who owns the interface
+nmcli device status
+nmcli general status
+pgrep -a wpa_supplicant
+journalctl -u NetworkManager -b | tail -40
+
 # Hardware
 sudo lshw -short
 sensors
@@ -1366,6 +1372,85 @@ apt-cache depends --recommends <pkg>
 zcat /var/log/apt/history.log*.gz | less
 ```
 
+
+### Wifi says `unmanaged`, or `unavailable`
+
+The single most likely thing to bite you on this build, because nothing errors
+when it goes wrong.
+
+With every desktop task deselected, the Debian installer configures wifi
+through **ifupdown**: the interface and the PSK go into
+`/etc/network/interfaces`, and ifupdown starts its own `wpa_supplicant` for it.
+That is what carries you through first boot. Then `bootstrap-sway` installs
+NetworkManager — and Debian ships NM with
+
+```
+[ifupdown]
+managed=false
+```
+
+so NM refuses to touch an interface ifupdown has claimed. Your wifi keeps
+working, so you don't notice. You notice weeks later, when `nmtui` shows the
+device as `unmanaged` and it reads like a driver or firmware fault.
+
+Then the obvious fix has its own trap. Commenting the stanza out is *not*
+enough: ifupdown's `wpa_supplicant` is still running and still holds the
+netdev, so the device moves from `unmanaged` to `unavailable` — a different
+symptom for the same unfinished handoff, and one that sends you off inspecting
+rfkill and firmware for a fault that isn't there.
+
+Do the whole handoff or none of it:
+
+```bash
+# 1. Which state are you actually in?
+nmcli device status              # unmanaged | unavailable | disconnected
+pgrep -a wpa_supplicant          # `-u` is NetworkManager's; `-i <iface>` is ifupdown's
+
+# 2. Remove the WHOLE stanza — the auto/allow-hotplug line, the iface line,
+#    and every indented option under it. A commented-out `iface` leaves its
+#    wpa-ssid/wpa-psk lines orphaned, which is a malformed interfaces(5) file.
+sudoedit /etc/network/interfaces
+ls /etc/network/interfaces.d/    # and check here too, it is easy to miss
+
+# 3. Release the device. Disabling the unit does not kill an orphan, because
+#    ifupdown's hook scripts start the supplicant outside systemd.
+sudo systemctl disable --now wpa_supplicant@wlp0s20f3.service
+sudo pkill -f 'wpa_supplicant.*-i *wlp0s20f3'
+sudo ifdown wlp0s20f3
+sudo ip addr flush dev wlp0s20f3
+
+# 4. Hand it over.
+sudo systemctl restart NetworkManager
+nmcli device status              # want: disconnected
+nmtui                            # retype the password once
+```
+
+`bootstrap-sway` offers to do all of this at the end of its run, and it is
+last in the script for a reason: it is the only step that can take the network
+away, and everything before it needs the network.
+
+Afterwards, `/etc/network/interfaces` should contain loopback and nothing else:
+
+```
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+```
+
+Your credentials now live in `/etc/NetworkManager/system-connections/<SSID>.nmconnection`
+(mode 600), written by `nmtui`. Nothing goes in `interfaces` by hand again.
+
+If the device still says `unavailable` once NM owns it, the radio is down, not
+the handoff:
+
+```bash
+rfkill list                # a hard block is Fn+F8 and must be cleared on the keyboard
+nmcli radio wifi           # NM persists this in /var/lib/NetworkManager/NetworkManager.state,
+                           # so an off written once stays off across reboots
+dmesg | grep -i iwlwifi    # firmware, if it is genuinely the driver
+```
+
 ---
 
 ## 12. What I'd deliberately skip
@@ -1376,6 +1461,9 @@ Advice is as much about omission. On this machine I would not bother with:
   is one line in your shell profile and one fewer moving part. Append it to
   `~/.profile`, not a new `~/.bash_profile` — creating the latter stops bash
   reading the former, and `~/.profile` is what puts `~/.local/bin` on PATH.
+  If you switch to zsh, that line has to move to `~/.zprofile`: zsh reads
+  neither of the other two, and sway simply stops starting with nothing in
+  any log to say why. `./extras shell` offers to mirror it for you.
 - **The fingerprint reader.** Fiddly PAM configuration, real lockout risk,
   marginal gain.
 - **Fractional scaling**, if you have the 1920×1200 panel. Scale 1 is correct

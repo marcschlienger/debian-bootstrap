@@ -81,10 +81,11 @@ Every script:
 `bootstrap-sway` and `extras` also take `--lean` to drop Recommends everywhere.
 It's there for completeness and argued against in guide §2.
 
-## The three failures worth knowing in advance
+## The failures worth knowing in advance
 
 | Symptom | Cause |
 |---|---|
+| Wifi is `unmanaged`, or `unavailable`, in nmtui | The ifupdown → NetworkManager handoff wasn't finished. `bootstrap-sway` offers to do it; guide §11 explains it |
 | Screen sharing shows black, no error | `XDG_CURRENT_DESKTOP` wasn't set before sway started, or your sway config is missing `include ~/.config/sway/config.d/*` |
 | No audio at all | `firmware-sof-signed` missing |
 | Brightness keys do nothing | Not in the `video` group, or you haven't logged out since being added |

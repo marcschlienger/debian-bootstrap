@@ -53,6 +53,9 @@ three layers at once later.
 ## Phase 2 — First boot
 
 - [ ] Log in at the TTY. You have almost nothing; that's expected.
+- [ ] **You're online via ifupdown**, not NetworkManager — the installer wrote
+      your wifi into `/etc/network/interfaces`. That's fine for now; phase 3
+      hands it over. → guide §11
 - [ ] **Check apt sources.** `/etc/apt/sources.list.d/debian.sources` needs
       `Components: main contrib non-free-firmware`. → guide §2
 
@@ -81,11 +84,25 @@ three layers at once later.
       don't apply to an existing session, and without them brightness keys
       fail silently. → guide §3
 - [ ] **Put your dotfiles in place:** `~/.config/sway`, `~/.config/kitty`.
+      `stow` is installed by `bootstrap-sway` precisely so this step works
+      before you get to `./extras cli` — `stow -d ~/.dotfiles sway kitty` and
+      you're done.
+- [ ] **Set your fonts.** The script installed FiraCode Nerd Font and
+      Symbols Nerd Font Mono into `~/.local/share/fonts` (it asks first; skip
+      with `--no-fonts`). Point kitty at `FiraCode Nerd Font`, and put
+      `"Symbols Nerd Font Mono"` last in waybar's `font-family` — it's the
+      fallback that makes icons render whatever else the bar is set to.
 - [ ] **Your sway config must contain `include ~/.config/sway/config.d/*`** or
       the portal drop-in is ignored and screen sharing breaks with no error.
       → guide §3
 - [ ] **Start sway** with `~/.local/bin/start-sway`, never bare `sway` — the
       wrapper is what loads the session environment. → guide §3
+- [ ] **Say yes to the wifi handoff** at the end of `bootstrap-sway`. It
+      disconnects you on purpose — everything that needed the network is done
+      by then — and you reconnect with `nmtui`. Skip it and NetworkManager
+      will report your wifi as `unmanaged` forever. → guide §11
+
+      nmcli device status      # want: disconnected, not unmanaged
 
 ---
 
@@ -97,6 +114,8 @@ Run all of these. Fix anything that fails *now*.
 - [ ] `wpctl status` → your audio card is listed (needs `firmware-sof-signed`)
 - [ ] `brightnessctl s 50%` → no permission error
 - [ ] `swaymsg -t get_outputs` → your panel
+- [ ] `fc-list | grep -i nerd` → both faces listed. Empty means the bar will
+      render boxes where icons should be.
 - [ ] **Firmware updates**, plugged in:
 
       sudo fwupdmgr refresh && sudo fwupdmgr update
@@ -115,6 +134,14 @@ Run all of these. Fix anything that fails *now*.
 - [ ] **Core:**
 
       ./extras cli editors lsp cpp python
+
+- [ ] **Shell**, if you want zsh — installs it, wires up the plugins, and
+      offers to change your login shell:
+
+      ./extras shell
+
+      Say yes when it offers to mirror the sway autostart into `~/.zprofile`.
+      zsh does not read `~/.profile`, which is where `--tty-autostart` put it.
 
 - [ ] **Desktop and documents:**
 
@@ -248,6 +275,8 @@ account for most problems:
 
 | Symptom | Cause |
 |---|---|
+| Wifi shows as `unmanaged` in nmtui | ifupdown still owns the interface; the handoff was skipped |
+| Wifi shows as `unavailable` after fixing that | The stanza was removed but ifupdown's `wpa_supplicant` is still running |
 | Screen sharing shows black, no error | `XDG_CURRENT_DESKTOP` not set before sway started, or the config.d drop-in isn't included |
 | No audio at all | `firmware-sof-signed` missing |
 | Brightness keys do nothing | Not in the `video` group, or haven't logged out since |

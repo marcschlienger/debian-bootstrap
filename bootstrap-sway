@@ -27,6 +27,7 @@
 #   ./bootstrap-sway --compare    # show cost of recommends on vs off
 #   ./bootstrap-sway --lean       # no recommends anywhere (not advised)
 #   ./bootstrap-sway --tty-autostart   # also add sway autostart on tty1
+#   ./bootstrap-sway --no-fonts        # skip the Nerd Font download
 #
 set -euo pipefail
 
@@ -34,12 +35,14 @@ DRY_RUN=0
 TTY_AUTOSTART=0
 COMPARE=0
 LEAN=0
+NO_FONTS=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run)       DRY_RUN=1 ;;
     --compare)       COMPARE=1; DRY_RUN=1 ;;
     --lean)          LEAN=1 ;;
     --tty-autostart) TTY_AUTOSTART=1 ;;
+    --no-fonts)      NO_FONTS=1 ;;
     -h|--help)       sed -n "2,/^set -euo/p" "$0" | sed '$d'; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 1 ;;
   esac
@@ -103,7 +106,7 @@ PKGS_NET=(
 PKGS_FONTS=(
   fonts-dejavu
   fonts-noto-color-emoji
-  fonts-jetbrains-mono
+  fonts-firacode
   fonts-font-awesome   # waybar's default config expects these glyphs
 )
 
@@ -126,6 +129,10 @@ PKGS_BASE=(
   pciutils usbutils lm-sensors
   less man-db bash-completion
   unzip
+  xz-utils        # tar -J, for the Nerd Font archives in section 9
+  stow            # dotfile deployment happens in the next step, not in
+                  # `extras cli` — needing it before it exists is the whole
+                  # reason it is here rather than there.
 )
 
 ALL_PKGS=(
@@ -318,10 +325,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Who currently owns the wifi?
+#
+# Computed here because two places need it: the warning below, and the
+# handoff in section 12. See that section for why this matters.
+# ---------------------------------------------------------------------------
+IFUPDOWN_FILES=(/etc/network/interfaces)
+[[ -d /etc/network/interfaces.d ]] && IFUPDOWN_FILES+=(/etc/network/interfaces.d/*)
+
+IFUPDOWN_WIFI="$(grep -hE '^[[:space:]]*iface[[:space:]]+wl' "${IFUPDOWN_FILES[@]}" 2>/dev/null \
+                 | awk '{print $2}' | head -1)"
+
+# ---------------------------------------------------------------------------
 # 6. Services
 # ---------------------------------------------------------------------------
 say "Enabling services"
 sudo systemctl enable --now NetworkManager.service || warn "NetworkManager not enabled"
+
+# Enabling NM is the moment the conflict in section 12 is created, so say so
+# here rather than letting it be discovered weeks later in nmtui.
+if [[ -n "$IFUPDOWN_WIFI" ]]; then
+  warn "ifupdown currently owns $IFUPDOWN_WIFI; NetworkManager will not manage it."
+  warn "This script offers to finish the handoff at the end (section 12)."
+fi
 sudo systemctl enable --now thermald.service 2>/dev/null || warn "thermald not enabled"
 sudo systemctl enable --now tlp.service 2>/dev/null || warn "tlp not enabled"
 systemctl --user enable --now pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null \
@@ -398,7 +424,96 @@ exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSO
 EOF
 
 # ---------------------------------------------------------------------------
-# 9. Locking on suspend
+# 9. Nerd Fonts
+#
+# There is no fonts-nerd-* package in Debian — the patched fonts are not in
+# the archive, and telling you to "grab a ttf manually later" is not a real
+# answer when waybar's config, and every bar config you will copy from the
+# internet, assumes the glyphs exist.
+#
+# Two fonts, two different jobs:
+#
+#   Symbols Nerd Font Mono   glyphs only, no letters. fontconfig falls back
+#                            to it, so the bar gets its icons whatever font
+#                            it is actually set to.
+#   FiraCode Nerd Font       a patched monospace face for kitty. Debian's
+#                            fonts-firacode, installed above, is the
+#                            unpatched original and has none of the glyphs.
+#
+# Per-user, into ~/.local/share/fonts: none of this needs root, and a font
+# out of a GitHub release has no business in /usr/share.
+# ---------------------------------------------------------------------------
+FONT_DIR="$HOME/.local/share/fonts"
+NERD_BASE="https://github.com/ryanoasis/nerd-fonts/releases/latest/download"
+
+install_nerd_font() {
+  local archive="$1" name="$2" dest="$FONT_DIR/$2"
+
+  # Idempotent by directory, so re-running the script is free.
+  if [[ -d "$dest" ]]; then
+    say "$name already present in $dest — skipping"
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp -d)" || { warn "mktemp failed"; return 1; }
+
+  say "Downloading $name"
+  if ! curl -fL --proto '=https' --tlsv1.2 -o "$tmp/font.tar.xz" \
+        "$NERD_BASE/${archive}.tar.xz"; then
+    warn "Download failed: $NERD_BASE/${archive}.tar.xz"
+    warn "Releases move around; check https://github.com/ryanoasis/nerd-fonts/releases"
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  mkdir -p "$dest"
+  if ! tar -xJf "$tmp/font.tar.xz" -C "$dest"; then
+    warn "Could not extract $name (is xz-utils installed?)"
+    rm -rf "$tmp" "$dest"
+    return 1
+  fi
+  rm -rf "$tmp"
+
+  # The archives also carry "Windows Compatible" duplicates of every face,
+  # which show up as a second set of entries in every font picker.
+  find "$dest" -name '*Windows Compatible*' -delete 2>/dev/null || true
+
+  say "Installed $name"
+}
+
+if [[ $NO_FONTS -eq 1 ]]; then
+  warn "Skipping Nerd Fonts (--no-fonts). waybar will show boxes where icons"
+  warn "should be until you install them."
+else
+  echo
+  echo "Nerd Fonts are not in Debian. These two come from GitHub releases:"
+  echo "  $NERD_BASE/NerdFontsSymbolsOnly.tar.xz   (bar icons)"
+  echo "  $NERD_BASE/FiraCode.tar.xz               (terminal)"
+  reply=""
+  read -rp $'\nDownload and install them into ~/.local/share/fonts? [Y/n] ' reply || true
+  if [[ "${reply:-}" == [Nn]* ]]; then
+    warn "Skipped. Re-run this script later, or install them by hand."
+  else
+    mkdir -p "$FONT_DIR"
+    install_nerd_font NerdFontsSymbolsOnly SymbolsNerdFont || true
+    install_nerd_font FiraCode             FiraCodeNerdFont || true
+
+    say "Rebuilding the font cache"
+    fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || warn "fc-cache failed"
+
+    # Verify rather than assume. A font that did not register shows up much
+    # later as blank boxes in the bar, which reads like a waybar bug and
+    # sends you debugging the wrong thing.
+    fc-list | grep -qi 'Symbols Nerd Font' \
+      || warn "Symbols Nerd Font did not register — check: fc-list | grep -i nerd"
+    fc-list | grep -qi 'FiraCode Nerd Font' \
+      || warn "FiraCode Nerd Font did not register — check: fc-list | grep -i nerd"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 10. Locking on suspend
 #
 # Deliberately NOT a systemd user unit: sleep.target does not exist in the
 # user manager, and WAYLAND_DISPLAY cannot be known ahead of time. swayidle's
@@ -413,7 +528,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# 10. Optional: start sway on tty1
+# 11. Optional: start sway on tty1
 # ---------------------------------------------------------------------------
 if [[ $TTY_AUTOSTART -eq 1 ]]; then
   # Append to the file bash ACTUALLY reads at login. Creating ~/.bash_profile
@@ -442,6 +557,146 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# 12. Finishing the ifupdown → NetworkManager handoff
+#
+# LAST in the script, deliberately: this is the only step that can take the
+# network away, and everything above it — apt, the font download — needs it.
+#
+# The problem this exists to solve:
+#
+# With every desktop task deselected, the Debian installer configures wifi
+# through ifupdown. It writes the interface into /etc/network/interfaces and
+# starts its own wpa_supplicant for it. This script then installs
+# NetworkManager, and Debian ships NM configured with
+#
+#     [ifupdown]
+#     managed=false
+#
+# so NM will not touch an interface ifupdown has claimed. Nothing errors.
+# Your wifi keeps working. You find out weeks later, when nmtui shows the
+# device as `unmanaged` and it reads like a driver or firmware fault.
+#
+# And the obvious fix is a trap of its own: commenting the stanza out is not
+# sufficient, because ifupdown's wpa_supplicant is still running and still
+# holds the netdev. The device then reports `unavailable` instead of
+# `unmanaged` — a new symptom for the same unfinished handoff, which sends
+# you off debugging rfkill and firmware.
+#
+# So: do the whole handoff, or none of it.
+#
+# What this does NOT do is migrate your PSK. Reading a passphrase out of one
+# file to write it into another is a poor trade for saving fifteen seconds in
+# nmtui, and every way it can fail leaves you on a laptop with no network.
+# You retype the password once, from the machine, with the AP in range.
+# ---------------------------------------------------------------------------
+if [[ -z "$IFUPDOWN_WIFI" ]]; then
+  say "Network: no ifupdown wifi stanza — NetworkManager already owns the wifi."
+else
+  echo
+  warn "ifupdown still owns $IFUPDOWN_WIFI, so NetworkManager cannot manage it."
+  cat <<EOF
+
+  Leaving it this way means nmtui will show $IFUPDOWN_WIFI as 'unmanaged'.
+
+  Finishing the handoff will:
+    - back up /etc/network/interfaces
+    - remove the $IFUPDOWN_WIFI stanza from it (loopback is left alone)
+    - stop the wpa_supplicant instance ifupdown started for it
+    - restart NetworkManager
+
+  This DISCONNECTS you. Everything this script needed the network for is
+  already done. You reconnect with:  nmtui
+
+EOF
+  reply=""
+  read -rp "Finish the handoff now? [y/N] " reply || true
+
+  if [[ "${reply:-}" != [Yy]* ]]; then
+    warn "Skipped. Do it later, or nmtui will keep reporting 'unmanaged'."
+  else
+    BACKUP="/etc/network/interfaces.bak.$(date +%Y%m%d%H%M%S)"
+    say "Backing up /etc/network/interfaces to $BACKUP"
+    sudo cp -a /etc/network/interfaces "$BACKUP"
+
+    # Remove the whole stanza, not just the `iface` line. A commented-out
+    # `iface` leaves its indented wpa-ssid/wpa-psk options orphaned, which is
+    # a malformed interfaces(5) file — and the reason hand-editing this goes
+    # wrong so often. Continuation lines are the indented ones that follow.
+    sudo awk -v ifc="$IFUPDOWN_WIFI" '
+      skip && /^[[:space:]]+[^[:space:]]/ { next }
+      { skip = 0 }
+      $1 == "iface" && $2 == ifc { skip = 1; next }
+      $1 == "auto" || $1 == "allow-hotplug" {
+        out = $1; n = 0
+        for (i = 2; i <= NF; i++) if ($i != ifc) { out = out " " $i; n++ }
+        if (n == 0) next        # the line named this interface and nothing else
+        print out; next
+      }
+      { print }
+    ' "$BACKUP" | sudo tee /etc/network/interfaces >/dev/null
+
+    # Anything in interfaces.d needs the same treatment, and is easy to miss
+    # because the file you were looking at was the wrong one.
+    if compgen -G "/etc/network/interfaces.d/*" >/dev/null; then
+      if grep -qhE "^[[:space:]]*iface[[:space:]]+${IFUPDOWN_WIFI}\b" /etc/network/interfaces.d/* 2>/dev/null; then
+        warn "A stanza for $IFUPDOWN_WIFI also exists in /etc/network/interfaces.d/."
+        warn "Not touching it — check it by hand, or ifupdown will reclaim the device at boot."
+      fi
+    fi
+
+    say "Releasing $IFUPDOWN_WIFI from ifupdown"
+    # The systemd instance, if there is one; then the process itself, because
+    # ifupdown's hook scripts start it outside systemd and disabling a unit
+    # does not touch an orphan.
+    sudo systemctl disable --now "wpa_supplicant@${IFUPDOWN_WIFI}.service" 2>/dev/null || true
+    sudo pkill -f "wpa_supplicant.*-i *${IFUPDOWN_WIFI}" 2>/dev/null || true
+    sudo ifdown "$IFUPDOWN_WIFI" 2>/dev/null || true
+    sudo ip addr flush dev "$IFUPDOWN_WIFI" 2>/dev/null || true
+    sudo ip link set "$IFUPDOWN_WIFI" down 2>/dev/null || true
+    sudo ip link set "$IFUPDOWN_WIFI" up   2>/dev/null || true
+
+    say "Restarting NetworkManager"
+    sudo systemctl restart NetworkManager
+
+    # NM's own radio switch persists in /var/lib/NetworkManager/NetworkManager.state,
+    # so a wifi-off written once stays off across reboots and looks like hardware.
+    if [[ "$(nmcli radio wifi 2>/dev/null)" == "disabled" ]]; then
+      say "Enabling the NetworkManager wifi radio"
+      nmcli radio wifi on || warn "could not enable the radio"
+    fi
+
+    # Verify rather than assume — the whole point of this section is that the
+    # broken state is silent.
+    STATE=""
+    for _ in 1 2 3 4 5; do
+      STATE="$(nmcli -t -f DEVICE,STATE device status 2>/dev/null \
+               | awk -F: -v d="$IFUPDOWN_WIFI" '$1 == d { print $2 }')"
+      [[ -n "$STATE" && "$STATE" != "unmanaged" && "$STATE" != "unavailable" ]] && break
+      sleep 2
+    done
+
+    case "$STATE" in
+      unmanaged)
+        warn "Still 'unmanaged'. Something else is claiming it — check for a drop-in:"
+        warn "  grep -rn 'unmanaged\|managed=' /etc/NetworkManager/ /usr/lib/NetworkManager/" ;;
+      unavailable)
+        warn "Now 'unavailable': NM owns the device but the radio is not up."
+        warn "  rfkill list          # a hard block is Fn+F8 and must be cleared on the keyboard"
+        warn "  pgrep -a wpa_supplicant   # an instance with -i $IFUPDOWN_WIFI is still holding it" ;;
+      "")
+        warn "NetworkManager does not list $IFUPDOWN_WIFI at all. Check: dmesg | grep -i iwlwifi" ;;
+      *)
+        say "$IFUPDOWN_WIFI is now '$STATE' — NetworkManager owns it. Connect with: nmtui" ;;
+    esac
+
+    echo
+    echo "  Backup of the original: $BACKUP"
+    echo "  To undo:  sudo cp -a $BACKUP /etc/network/interfaces && sudo reboot"
+    echo
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 say "Done."
 cat <<'EOF'
 
@@ -454,11 +709,11 @@ Next steps:
   3. Start with:  ~/.local/bin/start-sway
      Do NOT just run `sway` — the wrapper is what loads the session env.
      (or re-run this script with --tty-autostart)
-  4. Nerd Font glyphs for waybar are NOT packaged in Debian. If your bar
-     config uses them, grab one manually:
-       mkdir -p ~/.local/share/fonts && cd ~/.local/share/fonts
-       # download a .ttf from github.com/ryanoasis/nerd-fonts, then:
-       fc-cache -fv
+  4. Point your configs at the Nerd Fonts this script installed:
+       kitty:   font_family FiraCode Nerd Font
+       waybar:  font-family: "FiraCode Nerd Font", "Symbols Nerd Font Mono";
+     The Symbols face is glyphs only — it is the fontconfig fallback that
+     makes icons work in any font, so keep it last in the list.
 
 Verify it worked:
   echo $XDG_CURRENT_DESKTOP          # must print: sway
