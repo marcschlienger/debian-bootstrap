@@ -335,7 +335,7 @@ if [[ " ${SELECTED[*]} " == *" shell "* ]]; then
   if   [[ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]]; then
     AUTOSUGGEST=/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
   else
-    clone_plugin zsh-autosuggestions https://github.com/zsh-users/zsh-autosuggestions
+    clone_plugin zsh-autosuggestions https://github.com/zsh-users/zsh-autosuggestions || true
     [[ -f "$HOME/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh" ]] \
       && AUTOSUGGEST="$HOME/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh"
   fi
@@ -343,7 +343,7 @@ if [[ " ${SELECTED[*]} " == *" shell "* ]]; then
   if   [[ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]]; then
     SYNTAX=/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
   else
-    clone_plugin zsh-syntax-highlighting https://github.com/zsh-users/zsh-syntax-highlighting
+    clone_plugin zsh-syntax-highlighting https://github.com/zsh-users/zsh-syntax-highlighting || true
     [[ -f "$HOME/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ]] \
       && SYNTAX="$HOME/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
   fi
@@ -353,7 +353,7 @@ if [[ " ${SELECTED[*]} " == *" shell "* ]]; then
   elif [[ -d /usr/share/zsh/vendor-completions ]]; then
     COMPDIR=/usr/share/zsh/vendor-completions
   else
-    clone_plugin zsh-completions https://github.com/zsh-users/zsh-completions
+    clone_plugin zsh-completions https://github.com/zsh-users/zsh-completions || true
     [[ -d "$HOME/.zsh/plugins/zsh-completions/src" ]] \
       && COMPDIR="$HOME/.zsh/plugins/zsh-completions/src"
   fi
@@ -442,7 +442,7 @@ EOF
   # $SHELL is inherited from whatever process started this script, so it is
   # not evidence of anything. The passwd entry is the only authoritative
   # record. chsh on yourself needs your own password, not sudo.
-  CURRENT_SHELL="$(getent passwd "$USER" | cut -d: -f7)"
+  CURRENT_SHELL="$(getent passwd "$USER" | cut -d: -f7 || true)"
   if [[ "$CURRENT_SHELL" == "$ZSH_BIN" ]]; then
     say "Login shell is already $ZSH_BIN"
   elif ! grep -qxF "$ZSH_BIN" /etc/shells 2>/dev/null; then

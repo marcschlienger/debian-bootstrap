@@ -219,7 +219,10 @@ list_appimages() {
     echo "  (none)"
     return
   fi
+  local found=0
   for f in "$APP_DIR"/*.AppImage; do
+    [[ -e "$f" ]] || continue      # unmatched glob expands to itself
+    found=1
     local n
     n="$(basename "$f" .AppImage)"
     printf '  %-20s %8s  %s\n' \
@@ -227,6 +230,10 @@ list_appimages() {
       "$(du -h "$f" | cut -f1)" \
       "$(date -r "$f" '+%Y-%m-%d')"
   done
+  if [[ $found -eq 0 ]]; then
+    echo "  (none)"
+    return
+  fi
   echo
   echo "  Updates are manual. Check upstream, then:"
   echo "    $0 update <new-file> <name>"

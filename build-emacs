@@ -42,9 +42,11 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --deps-only)      DEPS_ONLY=1 ;;
     --no-aot)         AOT=0 ;;
-    --jobs)           JOBS="$2"; shift ;;
+    --jobs)           JOBS="${2:-}"; [[ -n "$JOBS" ]] || die "--jobs needs a number"; shift ;;
     --list-installed) ACTION="list" ;;
-    --uninstall)      ACTION="uninstall"; VERSION="$2"; shift ;;
+    --uninstall)      ACTION="uninstall"; VERSION="${2:-}"
+                      [[ -n "$VERSION" ]] || die "--uninstall needs a version, e.g. --uninstall 30.2"
+                      shift ;;
     -h|--help)        sed -n "2,/^set -euo/p" "$0" | sed '$d'; exit 0 ;;
     -*)               die "unknown option: $1" ;;
     *)                VERSION="$1" ;;
@@ -119,6 +121,10 @@ say "Installing build dependencies"
 
 # libgccjit must match the system GCC major version exactly, or
 # native compilation fails at runtime with a confusing load error.
+if ! command -v gcc >/dev/null; then
+  say "Installing build-essential first — gcc must exist to name the right libgccjit"
+  sudo apt-get install -y build-essential || die "Could not install build-essential"
+fi
 GCC_MAJOR="$(gcc -dumpversion | cut -d. -f1)"
 say "System GCC major version: $GCC_MAJOR"
 
