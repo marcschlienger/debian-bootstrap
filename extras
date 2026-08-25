@@ -1,0 +1,517 @@
+#!/usr/bin/env bash
+#
+# extras — optional software on top of the minimal Sway base.
+# Nothing here is required for the desktop to work. Pick what you want.
+#
+# Usage:
+#   ./extras --list           # show all groups and their contents
+#   ./extras cli media        # install specific groups
+#   ./extras --interactive    # walk through groups one at a time
+#   ./extras --dry-run cli    # show what a group would install
+#   ./extras --lean cli       # skip recommends (not advised; see the guide)
+#
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root." >&2; exit 1; }
+
+say()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Groups
+#
+# These are referenced indirectly via `declare -n` from ALL_GROUPS, which
+# static analysis cannot follow.
+# shellcheck disable=SC2034
+# ---------------------------------------------------------------------------
+
+# The terminal toolkit. If you install one group, make it this one.
+GROUP_cli=(
+  ripgrep         # rg — the one that actually changes how you work
+  fd-find         # binary is `fdfind` on Debian; alias it
+  fzf
+  bat             # binary is `batcat` on Debian
+  eza             # modern ls
+  zoxide          # smarter cd
+  jq
+  tree
+  ncdu            # disk usage, interactive
+  duf             # df that you can read
+  htop
+  btop
+  tmux
+  neovim
+  stow            # dotfile symlink management — pairs well with your repo
+  direnv
+  shellcheck
+  rsync
+  zip p7zip-full
+  tldr
+  fastfetch
+)
+
+# GUI odds and ends that a bare WM leaves you without.
+GROUP_desktop=(
+  thunar          # file manager (pulls some xfce libs, unavoidable)
+  gvfs gvfs-backends
+  udiskie         # automount removable media
+  wdisplays       # GUI display arrangement; kanshi handles the automatic case
+  gammastep       # night light
+  pavucontrol     # when nmtui-style TUI isn't enough for audio routing
+)
+
+GROUP_media=(
+  mpv
+  imv             # lightweight wayland image viewer
+  ffmpeg
+  imagemagick
+  yt-dlp
+  wf-recorder     # screen recording on wayland
+)
+
+GROUP_docs=(
+  zathura
+  zathura-pdf-poppler
+  poppler-utils   # pdftotext, pdfimages
+  pandoc
+)
+
+GROUP_go=(
+  golang
+  # Rust deliberately omitted: Debian's rustc lags badly. Use rustup:
+  #   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+)
+
+GROUP_security=(
+  keepassxc
+  pass
+  age
+  gnupg2
+  yubikey-manager
+)
+
+GROUP_backup=(
+  borgbackup
+  restic
+  rclone
+)
+
+GROUP_browser=(
+  firefox-esr
+  # Debian ships ESR only. For current Firefox or Chromium see the
+  # `flatpak` group below, or use Nix.
+)
+
+GROUP_virt=(
+  qemu-system-x86
+  libvirt-daemon-system
+  virt-manager
+  # Handy for keeping OpenBSD around without giving up the laptop to it.
+)
+
+GROUP_editors=(
+  emacs-pgtk      # Wayland-native Emacs; Debian builds it with native-comp
+                  # AND tree-sitter already. Check `apt policy emacs-pgtk`
+                  # before deciding you need a source build.
+  emacs-common-non-dfsg   # the manuals (GFDL, hence non-free)
+  neovim
+  # Debian's neovim lags upstream. For current, prefer:
+  #   nix profile install nixpkgs#neovim
+  # For Emacs from source, see build-emacs in this bundle.
+  editorconfig
+  ripgrep         # both editors' fuzzy-search backends want this
+  fd-find
+  # Language servers are a separate concern — see the `lsp` group.
+)
+
+GROUP_cpp=(
+  build-essential
+  gcc g++
+  clang clangd clang-format clang-tidy lldb
+  gdb
+  cmake ninja-build meson
+  pkg-config
+  ccache          # cuts rebuild times dramatically
+  bear            # generates compile_commands.json for clangd on make-based builds
+  valgrind
+  cppcheck
+  doxygen graphviz
+  autoconf automake libtool
+  gdbserver
+)
+
+GROUP_python=(
+  python3-full    # includes venv, the full stdlib, tkinter
+  python3-dev     # headers — needed for C extensions and for pybind11/cffi work
+  python3-venv
+  pipx            # install Python CLI tools without touching the system env
+  # DO NOT `pip install` system-wide on Debian: PEP 668 marks the system
+  # Python externally-managed and apt owns it. Use venvs or pipx.
+  # Recommended after this: pipx install uv
+)
+
+GROUP_lsp=(
+  # Reliably packaged in Debian.
+  clangd                 # C/C++
+  # These two are NOT dependably in Debian stable. They are listed so apt is
+  # used when available; the post-install hook detects a miss and offers a
+  # per-user fallback rather than leaving you with a silently absent server.
+  lua-language-server    # Lua      (fallback: upstream release tarball)
+  texlab                 # LaTeX    (fallback: cargo install --locked texlab)
+  # Tree-sitter grammars are compiled on demand by Emacs, which needs git
+  # plus a working C/C++ toolchain and linker.
+  build-essential
+  git
+  # NOT installed here, by design:
+  #   ty, ruff       -> uv tool install (see post-install note)
+  #   rust-analyzer  -> rustup component add (see post-install note)
+  #   pylsp          -> deliberately replaced by ty; the hook offers to purge it
+)
+
+GROUP_office=(
+  libreoffice-writer
+  libreoffice-calc
+  libreoffice-impress
+  libreoffice-gtk3   # REQUIRED for the Wayland-native GTK3 backend.
+                     # Without it LibreOffice falls back to its own toolkit
+                     # and looks and behaves badly under sway.
+  hunspell-en-us
+  hunspell-de-de
+  gimp
+  gimp-data-extras
+)
+
+GROUP_sync=(
+  nextcloud-desktop
+  # Tray-icon app. Sway has NO system tray — you need waybar's `tray`
+  # module enabled or this runs invisibly. See the post-install note.
+)
+
+GROUP_container=(
+  podman
+  distrobox
+  podman-compose
+  uidmap          # rootless podman needs this
+  slirp4netns
+  fuse-overlayfs
+)
+
+GROUP_flatpak=(
+  flatpak
+  # Adds flathub remote afterwards — see post-install hook.
+)
+
+ALL_GROUPS=(cli editors lsp cpp python go desktop office media docs sync container security backup browser virt flatpak)
+
+# ---------------------------------------------------------------------------
+DRY_RUN=0
+INTERACTIVE=0
+LEAN=0
+SELECTED=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --list)
+      for g in "${ALL_GROUPS[@]}"; do
+        declare -n ref="GROUP_$g"
+        printf '\n\033[1m%s\033[0m\n' "$g"
+        printf '  %s\n' "${ref[@]}"
+      done
+      exit 0 ;;
+    --dry-run)     DRY_RUN=1 ;;
+    --lean)        LEAN=1 ;;
+    --interactive) INTERACTIVE=1 ;;
+    -h|--help)     sed -n "2,/^set -euo/p" "$0" | sed '$d'; exit 0 ;;
+    -*)            echo "unknown option: $arg" >&2; exit 1 ;;
+    *)
+      if [[ " ${ALL_GROUPS[*]} " == *" $arg "* ]]; then
+        SELECTED+=("$arg")
+      else
+        echo "unknown group: $arg (try --list)" >&2; exit 1
+      fi ;;
+  esac
+done
+
+if [[ $INTERACTIVE -eq 1 ]]; then
+  SELECTED=()
+  for g in "${ALL_GROUPS[@]}"; do
+    declare -n ref="GROUP_$g"
+    printf '\n\033[1m%s\033[0m: %s\n' "$g" "${ref[*]}"
+    r=""
+    read -rp "Install this group? [y/N] " r || true
+    [[ "${r:-}" == [Yy]* ]] && SELECTED+=("$g")
+  done
+fi
+
+[[ ${#SELECTED[@]} -eq 0 ]] && { echo "Nothing selected. Try --list or --interactive."; exit 0; }
+
+# ---------------------------------------------------------------------------
+WANTED=()
+for g in "${SELECTED[@]}"; do
+  declare -n ref="GROUP_$g"
+  WANTED+=("${ref[@]}")
+done
+
+say "Refreshing package lists"
+[[ $DRY_RUN -eq 0 ]] && sudo apt-get update -qq
+
+# apt-cache show succeeds for packages that merely appear in some dependency
+# list but have no installation candidate; policy is the real test.
+installable() {
+  local cand
+  cand="$(apt-cache policy "$1" 2>/dev/null | awk -F': ' '/Candidate:/{print $2}')"
+  [[ -n "$cand" && "$cand" != "(none)" ]]
+}
+
+AVAILABLE=(); MISSING=()
+for p in "${WANTED[@]}"; do
+  if installable "$p"; then AVAILABLE+=("$p"); else MISSING+=("$p"); fi
+done
+[[ ${#MISSING[@]} -gt 0 ]] && warn "Not in this release, skipping: ${MISSING[*]}"
+
+say "Groups: ${SELECTED[*]}"
+say "Packages (${#AVAILABLE[@]}):"
+printf '  %s\n' "${AVAILABLE[@]}"
+
+[[ $DRY_RUN -eq 1 ]] && { say "Dry run — nothing installed."; exit 0; }
+
+read -rp $'\nProceed? [y/N] ' reply || true
+[[ "${reply:-}" == [Yy]* ]] || { echo "Aborted."; exit 0; }
+
+# Recommends stay ENABLED, matching bootstrap-sway and Debian's tested
+# configuration. The desktop/office/docs groups in particular are half-broken
+# without them (thunar without gvfs, zathura without a rendering backend).
+if [[ ${#AVAILABLE[@]} -eq 0 ]]; then
+  warn "Nothing installable in the selected groups."
+  exit 0
+elif [[ $LEAN -eq 1 ]]; then
+  sudo apt-get install -y --no-install-recommends "${AVAILABLE[@]}"
+else
+  sudo apt-get install -y "${AVAILABLE[@]}"
+fi
+
+# ---------------------------------------------------------------------------
+# Post-install hooks
+# ---------------------------------------------------------------------------
+if [[ " ${SELECTED[*]} " == *" flatpak "* ]]; then
+  say "Adding flathub remote"
+  sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+  echo "  Then e.g.: flatpak install flathub org.mozilla.firefox"
+fi
+
+if [[ " ${SELECTED[*]} " == *" virt "* ]]; then
+  say "Adding you to the libvirt group (log out to take effect)"
+  sudo usermod -aG libvirt "$USER"
+fi
+
+if [[ " ${SELECTED[*]} " == *" editors "* ]]; then
+  cat <<'EOF'
+
+Editors installed. Two things worth knowing:
+
+  emacs-pgtk is the Wayland-native build. Verify with:
+    emacs -Q --eval '(message "pgtk: %s  native-comp: %s" (featurep (quote pgtk)) (native-comp-available-p))'
+
+  Note that emacs-common-non-dfsg (the manuals) needs non-free in your
+  sources. If it was skipped above, that is why.
+
+  For a source build with your own configure flags, use build-emacs.
+  It installs into a GNU Stow prefix so it stays removable.
+
+EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" lsp "* ]]; then
+  say "Language servers: the parts apt cannot provide"
+
+  # --- pylsp must go: ty replaces it, and two Python LSPs fighting over the
+  # same buffer produces duplicated diagnostics and confusing completions.
+  PYLSP_PKGS=()
+  for pkg in python3-pylsp python3-pylsp-jsonrpc python-lsp-server; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then PYLSP_PKGS+=("$pkg"); fi
+  done
+  if [[ ${#PYLSP_PKGS[@]} -gt 0 ]]; then
+    warn "Found pylsp packages: ${PYLSP_PKGS[*]}"
+    warn "These conflict with ty. Removing them is recommended."
+    r=""
+    read -rp "Purge them now? [y/N] " r || true
+    if [[ "${r:-}" == [Yy]* ]]; then
+      sudo apt-get purge -y "${PYLSP_PKGS[@]}"
+    fi
+  fi
+  # pipx/uv installs live outside dpkg, so check those too.
+  if command -v pipx >/dev/null && pipx list 2>/dev/null | grep -q 'python-lsp-server'; then
+    warn "pylsp is also installed via pipx. Remove with: pipx uninstall python-lsp-server"
+  fi
+
+  # --- uv, then ty and ruff through it (portable, version-pinned, no apt).
+  if ! command -v uv >/dev/null; then
+    if command -v pipx >/dev/null; then
+      say "Installing uv via pipx"
+      pipx install uv || warn "pipx install uv failed"
+    else
+      warn "uv not found and pipx not installed. Install the python group first,"
+      warn "or use the standalone installer:"
+      warn "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    fi
+  fi
+
+  if command -v uv >/dev/null; then
+    say "Installing ty and ruff via uv"
+    uv tool install ty@latest   || warn "uv tool install ty failed"
+    uv tool install ruff@latest || warn "uv tool install ruff failed"
+  else
+    warn "Skipping ty/ruff — no uv. Once you have it:"
+    warn "  uv tool install ty@latest && uv tool install ruff@latest"
+  fi
+
+  # --- servers apt may not have carried: fall back per-user rather than
+  #     leaving them silently missing.
+  if ! command -v texlab >/dev/null; then
+    warn "texlab is not on PATH (Debian may not package it)."
+    if command -v cargo >/dev/null; then
+      r=""
+      read -rp "Build it with cargo install --locked texlab? [y/N] " r || true
+      if [[ "${r:-}" == [Yy]* ]]; then
+        cargo install --locked texlab || warn "cargo install texlab failed"
+      fi
+    else
+      warn "Install rustup first, then: cargo install --locked texlab"
+      warn "Or take a prebuilt binary from https://github.com/latex-lsp/texlab/releases"
+    fi
+  fi
+
+  if ! command -v lua-language-server >/dev/null; then
+    cat <<'EOF'
+
+  lua-language-server is not on PATH. Debian stable may not package it.
+  Upstream ships a prebuilt tarball; install it per-user:
+
+    mkdir -p ~/.local/lib/lua-language-server
+    # download the linux-x64 tarball from:
+    #   https://github.com/LuaLS/lua-language-server/releases
+    tar xzf lua-language-server-*-linux-x64.tar.gz \
+        -C ~/.local/lib/lua-language-server
+    ln -sf ~/.local/lib/lua-language-server/bin/lua-language-server \
+        ~/.local/bin/lua-language-server
+
+EOF
+  fi
+
+  # --- rust-analyzer belongs to the toolchain, not the distro.
+  if command -v rustup >/dev/null; then
+    say "Adding rust-analyzer component"
+    rustup component add rust-analyzer || warn "rustup component add failed"
+  else
+    warn "rustup not installed, so rust-analyzer was skipped. Debian's rustc is"
+    warn "too old to track rust-analyzer; install the toolchain properly:"
+    warn "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    warn "  rustup component add rust-analyzer"
+  fi
+
+  cat <<'EOF'
+
+  Final server list and where each comes from:
+
+    clangd               apt
+    lua-language-server  apt if packaged, else upstream tarball
+    texlab               apt if packaged, else cargo install --locked texlab
+    ty                   uv tool install ty@latest
+    ruff                 uv tool install ruff@latest
+    rust-analyzer        rustup component add rust-analyzer
+
+  uv and rustup both install into ~/.local/bin (and ~/.cargo/bin). Emacs
+  started from a graphical session inherits PATH from your login shell, so
+  confirm both are on it BEFORE debugging "eglot can't find the server":
+
+    command -v ty ruff rust-analyzer clangd texlab lua-language-server
+
+  Keeping them current is manual and deliberate:
+    uv tool upgrade --all
+    rustup update
+
+  No Swift or SourceKit component is needed on Linux.
+
+EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" python "* ]]; then
+  cat <<'EOF'
+
+Python on Debian — the one rule that matters:
+
+  The system Python is marked externally-managed (PEP 668). `pip install`
+  outside a venv will refuse, and --break-system-packages is how people
+  destroy their apt state. Don't.
+
+    python3 -m venv .venv && . .venv/bin/activate    # per project
+    pipx install <tool>                              # CLI tools, isolated
+
+  Recommended next step — uv handles venvs, versions and installs, and is
+  far faster than pip:
+    pipx install uv
+
+EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" sync "* ]]; then
+  cat <<'EOF'
+
+Nextcloud client installed. IMPORTANT: sway has no system tray.
+
+  The client's only UI is its tray icon, so without a tray it runs
+  invisibly. Enable waybar's tray module — in ~/.config/waybar/config:
+
+    "modules-right": ["tray", ...],
+    "tray": { "spacing": 10, "icon-size": 18 }
+
+  Same applies to Cryptomator and anything else tray-driven.
+
+EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" office "* ]]; then
+  cat <<'EOF'
+
+LibreOffice installed with the GTK3 backend (libreoffice-gtk3). Verify it
+is actually being used — without it you get the ugly, non-native fallback:
+
+    SAL_USE_VCLPLUGIN=gtk3 libreoffice --writer
+
+  If the window has no native decorations or scrolling feels wrong, the
+  gtk3 package is missing.
+
+EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" container "* ]]; then
+  cat <<'EOF'
+
+Podman + distrobox installed (rootless).
+
+  Create a container matching your Ubuntu servers:
+    distrobox create --name ubuntu-srv --image ubuntu:24.04
+    distrobox enter ubuntu-srv
+
+  Note: distrobox shares your HOME by default. That means shared dotfiles
+  AND shared caches — a ~/.cache/pip or ~/.cargo built inside the container
+  can confuse the host. Use --home ~/.local/share/distrobox/<name> to
+  isolate if that bites you.
+
+EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" cli "* ]]; then
+  cat <<'EOF'
+
+Debian renames two binaries to avoid collisions. Add to your shell rc:
+
+  alias fd='fdfind'
+  alias bat='batcat'
+  eval "$(zoxide init bash)"     # or zsh
+  eval "$(direnv hook bash)"
+
+EOF
+fi
+
+say "Done."

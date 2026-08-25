@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+#
+# build-emacs — build Emacs from source on Debian Trixie, installed into a
+# GNU Stow prefix so it stays trackable and cleanly removable.
+#
+# Builds with: pure GTK (Wayland-native), native compilation (AOT),
+#              tree-sitter, and the usual image/JSON/sqlite support.
+#
+# Before you run this: check whether you actually need to.
+#   apt policy emacs-pgtk
+# Debian's package is built with native-comp, tree-sitter and pgtk already.
+# If the version there is good enough, use it and skip all of this.
+#
+# Usage:
+#   ./build-emacs 30.2              # build and install version 30.2
+#   ./build-emacs 30.2 --deps-only  # just install build dependencies
+#   ./build-emacs 30.2 --no-aot     # faster build, lazy native-comp
+#   ./build-emacs --list-installed  # show Stow-managed Emacs versions
+#   ./build-emacs --uninstall 30.2  # unstow and remove that version
+#
+set -euo pipefail
+
+SRC_DIR="${HOME}/src"
+STOW_DIR="/usr/local/stow"
+JOBS="$(nproc)"
+AOT=1
+DEPS_ONLY=0
+
+say()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] && die "Run as your normal user, not root. sudo is used where needed."
+
+# ---------------------------------------------------------------------------
+# Arguments
+# ---------------------------------------------------------------------------
+VERSION=""
+ACTION="build"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --deps-only)      DEPS_ONLY=1 ;;
+    --no-aot)         AOT=0 ;;
+    --jobs)           JOBS="$2"; shift ;;
+    --list-installed) ACTION="list" ;;
+    --uninstall)      ACTION="uninstall"; VERSION="$2"; shift ;;
+    -h|--help)        sed -n "2,/^set -euo/p" "$0" | sed '$d'; exit 0 ;;
+    -*)               die "unknown option: $1" ;;
+    *)                VERSION="$1" ;;
+  esac
+  shift
+done
+
+# ---------------------------------------------------------------------------
+# list / uninstall
+# ---------------------------------------------------------------------------
+if [[ "$ACTION" == "list" ]]; then
+  say "Stow-managed packages in $STOW_DIR"
+  if [[ -d "$STOW_DIR" ]]; then
+    ls -1 "$STOW_DIR" | sed 's/^/  /'
+  else
+    echo "  (none — $STOW_DIR does not exist)"
+  fi
+  say "Currently active emacs"
+  command -v emacs && emacs --version | head -1 || echo "  none on PATH"
+  exit 0
+fi
+
+if [[ "$ACTION" == "uninstall" ]]; then
+  [[ -z "$VERSION" ]] && die "--uninstall needs a version, e.g. --uninstall 30.2"
+  PKG="emacs-${VERSION}"
+  [[ -d "$STOW_DIR/$PKG" ]] || die "$STOW_DIR/$PKG does not exist"
+  say "Unstowing $PKG"
+  ( cd "$STOW_DIR" && sudo stow -D "$PKG" )
+  say "Removing $STOW_DIR/$PKG"
+  sudo rm -rf "${STOW_DIR:?}/${PKG:?}"
+  warn "Native-compiled cache is version-specific. Consider clearing it:"
+  warn "  rm -rf ~/.emacs.d/eln-cache  (or ~/.config/emacs/eln-cache)"
+  say "Done."
+  exit 0
+fi
+
+[[ -z "$VERSION" ]] && die "Give a version, e.g. ./build-emacs 30.2"
+
+# ---------------------------------------------------------------------------
+# 1. deb-src — apt build-dep silently fails without it
+# ---------------------------------------------------------------------------
+say "Checking for deb-src sources"
+if ! grep -qrE '^(deb-src|Types:.*deb-src)' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null; then
+  warn "No deb-src entries found. 'apt build-dep' cannot work without them."
+  cat <<'EOF'
+
+  Trixie uses deb822 format. Edit /etc/apt/sources.list.d/debian.sources
+  and change the Types line of the main stanza from:
+
+      Types: deb
+  to:
+      Types: deb deb-src
+
+  Then run: sudo apt update
+
+EOF
+  read -rp "Attempt to patch it automatically? [y/N] " r || true
+  if [[ "${r:-}" == [Yy]* ]]; then
+    sudo sed -i '0,/^Types: deb$/s//Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+    sudo apt-get update
+    grep -q 'deb-src' /etc/apt/sources.list.d/debian.sources \
+      || die "Patch failed — edit the file by hand."
+  else
+    die "Enable deb-src and re-run."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Build dependencies
+# ---------------------------------------------------------------------------
+say "Installing build dependencies"
+
+# libgccjit must match the system GCC major version exactly, or
+# native compilation fails at runtime with a confusing load error.
+GCC_MAJOR="$(gcc -dumpversion | cut -d. -f1)"
+say "System GCC major version: $GCC_MAJOR"
+
+EXTRA_DEPS=(
+  build-essential
+  autoconf
+  texinfo
+  stow
+  "libgccjit-${GCC_MAJOR}-dev"   # native compilation
+  libgtk-3-dev                   # pgtk is GTK3, not GTK4
+  libtree-sitter-dev
+  libsqlite3-dev
+  libgnutls28-dev
+  libjansson-dev                 # only used by Emacs 29; harmless on 30+
+  libwebp-dev
+  libjpeg-dev libpng-dev libtiff-dev libgif-dev
+  librsvg2-dev
+  libxml2-dev
+  libacl1-dev
+  libsystemd-dev                 # systemd notification for the daemon
+)
+
+installable() {
+  local cand
+  cand="$(apt-cache policy "$1" 2>/dev/null | awk -F': ' '/Candidate:/{print $2}')"
+  [[ -n "$cand" && "$cand" != "(none)" ]]
+}
+
+AVAIL=(); MISSING=()
+for p in "${EXTRA_DEPS[@]}"; do
+  if installable "$p"; then AVAIL+=("$p"); else MISSING+=("$p"); fi
+done
+
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  warn "Not available, skipping: ${MISSING[*]}"
+  case " ${MISSING[*]} " in
+    *" libgccjit-${GCC_MAJOR}-dev "*)
+      die "libgccjit for GCC ${GCC_MAJOR} is missing — native compilation cannot work.
+    Check what is available:  apt-cache search libgccjit" ;;
+  esac
+fi
+
+sudo apt-get build-dep -y emacs || warn "build-dep for emacs failed; continuing with explicit deps"
+[[ ${#AVAIL[@]} -gt 0 ]] && sudo apt-get install -y "${AVAIL[@]}"
+
+if [[ $DEPS_ONLY -eq 1 ]]; then
+  say "Dependencies installed. Stopping (--deps-only)."
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Fetch and verify source
+# ---------------------------------------------------------------------------
+TARBALL="emacs-${VERSION}.tar.xz"
+URL="https://ftpmirror.gnu.org/emacs/${TARBALL}"
+
+mkdir -p "$SRC_DIR"
+cd "$SRC_DIR"
+
+if [[ ! -f "$TARBALL" ]]; then
+  say "Downloading $TARBALL"
+  curl -fL -o "$TARBALL" "$URL" || die "Download failed — check the version number exists"
+else
+  say "Using cached $TARBALL"
+fi
+
+say "Verifying GPG signature"
+if [[ ! -f "${TARBALL}.sig" ]]; then
+  curl -fLs -o "${TARBALL}.sig" "${URL}.sig" || warn "Could not fetch signature"
+fi
+if [[ -f "${TARBALL}.sig" ]]; then
+  if gpg --verify "${TARBALL}.sig" "$TARBALL" 2>/dev/null; then
+    say "Signature OK"
+  else
+    warn "Signature could not be verified. You likely need the GNU keyring:"
+    warn "  gpg --keyserver keyserver.ubuntu.com --recv-keys \$(gpg --verify ${TARBALL}.sig 2>&1 | grep -oE '[0-9A-F]{16}' | head -1)"
+    read -rp "Continue anyway? [y/N] " r || true
+    [[ "${r:-}" == [Yy]* ]] || exit 1
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Configure and build
+# ---------------------------------------------------------------------------
+SRC="${SRC_DIR}/emacs-${VERSION}"
+PREFIX="${STOW_DIR}/emacs-${VERSION}"
+
+if [[ -d "$SRC" ]]; then
+  say "Source tree exists — cleaning"
+  ( cd "$SRC" && make distclean >/dev/null 2>&1 || true )
+else
+  say "Extracting"
+  tar xf "$TARBALL"
+fi
+
+cd "$SRC"
+
+NATIVE_COMP="--with-native-compilation=aot"
+[[ $AOT -eq 0 ]] && NATIVE_COMP="--with-native-compilation=yes"
+
+say "Configuring (prefix: $PREFIX)"
+
+# Emacs prints its feature summary to stdout at the end of configure, not to
+# config.log. Capture it so we can show it back and so pipefail catches a
+# configure failure.
+./configure \
+  --prefix="$PREFIX" \
+  --with-pgtk \
+  "$NATIVE_COMP" \
+  --with-tree-sitter \
+  --with-xml2 \
+  --with-gnutls \
+  --with-sqlite3 \
+  --with-webp \
+  --with-rsvg \
+  --with-modules 2>&1 | tee "${SRC}/configure.out"
+
+echo
+say "Configure summary — verify these before spending 40 minutes on a build:"
+grep -iE 'pure GTK|native lisp|tree-sitter|Does Emacs use' "${SRC}/configure.out" \
+  | sed 's/^/  /' || warn "Could not parse the summary; read ${SRC}/configure.out"
+
+read -rp "Proceed with build? [y/N] " r || true
+[[ "${r:-}" == [Yy]* ]] || { echo "Aborted."; exit 0; }
+
+if [[ $AOT -eq 1 ]]; then
+  warn "AOT native compilation: expect 20-40 minutes on an i7 mobile CPU."
+fi
+
+say "Building with $JOBS jobs"
+time make -j"$JOBS"
+
+# ---------------------------------------------------------------------------
+# 5. Install into the Stow prefix, then link
+# ---------------------------------------------------------------------------
+say "Installing into $PREFIX"
+sudo mkdir -p "$STOW_DIR"
+sudo make install
+
+say "Stowing emacs-${VERSION} into /usr/local"
+( cd "$STOW_DIR" && sudo stow --verbose=1 "emacs-${VERSION}" )
+
+# ---------------------------------------------------------------------------
+# 6. systemd user unit
+#
+# Upstream installs its unit under the Stow prefix, where the systemd user
+# manager will not look. Copy it into place with a corrected ExecStart.
+# ---------------------------------------------------------------------------
+say "Installing systemd user unit for the Emacs daemon"
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/emacs.service <<EOF
+[Unit]
+Description=Emacs daemon (built from source ${VERSION})
+Documentation=info:emacs man:emacs(1)
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/emacs --fg-daemon
+ExecStop=/usr/local/bin/emacsclient --eval "(kill-emacs)"
+Environment=SSH_AUTH_SOCK=%t/keyring/ssh
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+say "Enable it with: systemctl --user enable --now emacs"
+
+# ---------------------------------------------------------------------------
+# 7. Stale native-comp cache
+# ---------------------------------------------------------------------------
+for cache in "$HOME/.emacs.d/eln-cache" "$HOME/.config/emacs/eln-cache"; do
+  if [[ -d "$cache" ]]; then
+    warn "Stale native-comp cache found: $cache"
+    warn "It is keyed to the previous build and will silently accumulate."
+    read -rp "Remove it? [y/N] " r || true
+    [[ "${r:-}" == [Yy]* ]] && rm -rf "$cache"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+say "Done."
+cat <<EOF
+
+  Installed: $PREFIX  (linked into /usr/local via stow)
+  Binary:    $(command -v emacs || echo /usr/local/bin/emacs)
+
+  Verify the Wayland frontend is actually in use — from inside Emacs:
+    M-: (featurep 'pgtk)      => t
+    M-: (native-comp-available-p)  => t
+
+  Manage versions:
+    ./build-emacs --list-installed
+    ./build-emacs --uninstall ${VERSION}
+
+  Note: /usr/local/bin precedes /usr/bin on Debian's default PATH, so this
+  build shadows any packaged emacs without conflicting with it. You can keep
+  emacs-pgtk installed as a fallback.
+
+EOF

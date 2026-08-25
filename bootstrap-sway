@@ -1,0 +1,472 @@
+#!/usr/bin/env bash
+#
+# bootstrap-sway — minimal Sway desktop on Debian stable (Trixie)
+# Target: ThinkPad T14 Gen 3 (Alder Lake), kitty as terminal.
+#
+# Assumes: netinst image, tasksel with every desktop environment deselected.
+#          Leaving "standard system utilities" checked is recommended; the
+#          script works either way.
+#
+# RECOMMENDS POLICY
+#   Debian Policy treats Recommends as a strong dependency: packages that
+#   would be found together in all but unusual installations. This script
+#   therefore leaves recommends ENABLED — the Debian-tested configuration.
+#
+#   Minimality comes from choosing few packages, not from suppressing
+#   dependencies. Before installing, the script shows you the complete
+#   resolved package list and total download/disk size, so the decision is
+#   informed rather than blind.
+#
+#   A small number of packages are known to pull disproportionate weight for
+#   this use case; those are listed in PKGS_LEAN below and installed without
+#   recommends as a deliberate, documented exception.
+#
+# Usage:
+#   ./bootstrap-sway              # install (recommends on, as Debian intends)
+#   ./bootstrap-sway --dry-run    # full resolved dependency list + sizes
+#   ./bootstrap-sway --compare    # show cost of recommends on vs off
+#   ./bootstrap-sway --lean       # no recommends anywhere (not advised)
+#   ./bootstrap-sway --tty-autostart   # also add sway autostart on tty1
+#
+set -euo pipefail
+
+DRY_RUN=0
+TTY_AUTOSTART=0
+COMPARE=0
+LEAN=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)       DRY_RUN=1 ;;
+    --compare)       COMPARE=1; DRY_RUN=1 ;;
+    --lean)          LEAN=1 ;;
+    --tty-autostart) TTY_AUTOSTART=1 ;;
+    -h|--help)       sed -n "2,/^set -euo/p" "$0" | sed '$d'; exit 0 ;;
+    *) echo "unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
+
+[[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root. sudo is used where needed." >&2; exit 1; }
+
+say() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Package sets
+# ---------------------------------------------------------------------------
+
+# Compositor, session plumbing, and the bits a bare sway genuinely cannot
+# do without. Debian splits these out (unlike Arch's sway package), so
+# every one of these is load-bearing.
+PKGS_SWAY=(
+  sway            # compositor
+  swaybg          # wallpaper — separate package on Debian
+  swayidle        # idle timeouts
+  swaylock        # screen locker
+  waybar          # status bar
+  fuzzel          # launcher (wayland-native; bemenu/wofi are alternatives)
+  mako-notifier   # notification daemon
+  libnotify-bin   # notify-send
+  kanshi          # per-output profiles — this is what makes docking sane
+  xwayland        # X11 fallback for the apps that still need it
+  wl-clipboard    # wl-copy / wl-paste
+  grim slurp      # screenshots + region select
+  brightnessctl   # backlight keys
+  playerctl       # media keys
+  mate-polkit     # polkit auth agent (lightest sane option on Debian)
+  polkitd
+  dbus-user-session
+)
+
+# Portals: screen sharing, file pickers, "open with". Without these,
+# screen share in browsers silently does nothing.
+PKGS_PORTAL=(
+  xdg-desktop-portal
+  xdg-desktop-portal-wlr
+  xdg-desktop-portal-gtk
+)
+
+PKGS_TERMINAL=(
+  kitty
+  kitty-terminfo  # so ssh into other boxes doesn't break
+)
+
+PKGS_AUDIO=(
+  pipewire
+  pipewire-audio   # metapackage: pulse + alsa + jack shims
+  wireplumber
+)
+
+PKGS_NET=(
+  network-manager  # ships nmtui — no tray applet needed
+)
+
+PKGS_FONTS=(
+  fonts-dejavu
+  fonts-noto-color-emoji
+  fonts-jetbrains-mono
+  fonts-font-awesome   # waybar's default config expects these glyphs
+)
+
+# T14 Gen 3 specifics. firmware-sof-signed is NOT optional — without it
+# you get no sound at all on this generation.
+PKGS_HARDWARE=(
+  firmware-iwlwifi              # AX211 wifi
+  firmware-sof-signed           # audio DSP
+  intel-microcode
+  intel-media-va-driver-non-free  # VAAPI hw video decode
+  mesa-va-drivers
+  fwupd                         # Lenovo supports LVFS properly
+  thermald
+  tlp                           # power management
+  powertop
+)
+
+PKGS_BASE=(
+  git curl ca-certificates gnupg
+  pciutils usbutils lm-sensors
+  less man-db bash-completion
+  unzip
+)
+
+ALL_PKGS=(
+  "${PKGS_SWAY[@]}" "${PKGS_PORTAL[@]}" "${PKGS_TERMINAL[@]}"
+  "${PKGS_AUDIO[@]}" "${PKGS_NET[@]}" "${PKGS_FONTS[@]}"
+  "${PKGS_HARDWARE[@]}" "${PKGS_BASE[@]}"
+)
+
+# Deliberate exceptions: installed WITHOUT recommends because their
+# recommends pull in a desktop stack we're specifically replacing.
+# Each one is a considered decision, not a blanket policy.
+#
+#   mate-polkit  — recommends the MATE session/settings daemon. We want only
+#                  the authentication agent binary; sway provides the session.
+#
+# Keep this list short. If you add to it, write down why.
+PKGS_LEAN=(
+  mate-polkit
+)
+
+in_lean() {
+  local p="$1" x
+  for x in "${PKGS_LEAN[@]}"; do [[ "$x" == "$p" ]] && return 0; done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# 1. Recommends policy — check for, and warn about, a global override
+# ---------------------------------------------------------------------------
+say "Checking apt recommends configuration"
+if [[ -f /etc/apt/apt.conf.d/99norecommends ]]; then
+  warn "/etc/apt/apt.conf.d/99norecommends exists — recommends are globally off."
+  warn "This script no longer sets that, and does not assume it. Debian's"
+  warn "tested configuration is recommends ON. To revert:"
+  warn "  sudo rm /etc/apt/apt.conf.d/99norecommends"
+fi
+if [[ $LEAN -eq 1 ]]; then
+  warn "--lean: installing everything without recommends."
+  warn "Expect some packages to be functionally incomplete. See the guide."
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Ensure non-free-firmware is enabled
+# ---------------------------------------------------------------------------
+say "Checking apt components"
+if ! apt-cache policy 2>/dev/null | grep -q 'non-free-firmware'; then
+  warn "non-free-firmware not enabled — wifi/audio firmware will be missing."
+  warn "Add it to /etc/apt/sources.list (or .sources) and re-run:"
+  warn "  Components: main contrib non-free-firmware"
+  [[ $DRY_RUN -eq 0 ]] && exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Filter out anything not in this release, so one bad name doesn't
+#    abort the whole install
+# ---------------------------------------------------------------------------
+say "Refreshing package lists"
+if [[ $DRY_RUN -eq 0 ]]; then
+  sudo apt-get update -qq
+fi
+
+# `apt-cache show` is not a good enough test: it succeeds for packages that
+# merely appear in some dependency list but have no installation candidate.
+# `apt-cache policy` tells us whether apt could actually install it.
+installable() {
+  local cand
+  cand="$(apt-cache policy "$1" 2>/dev/null | awk -F': ' '/Candidate:/{print $2}')"
+  [[ -n "$cand" && "$cand" != "(none)" ]]
+}
+
+AVAILABLE=(); MISSING=()
+for p in "${ALL_PKGS[@]}"; do
+  if installable "$p"; then AVAILABLE+=("$p"); else MISSING+=("$p"); fi
+done
+
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  warn "Not available in this release, skipping: ${MISSING[*]}"
+fi
+
+say "You explicitly selected ${#AVAILABLE[@]} packages:"
+printf '  %s\n' "${AVAILABLE[@]}"
+
+# ---------------------------------------------------------------------------
+# 4. Resolve — show the FULL picture before committing to anything
+# ---------------------------------------------------------------------------
+
+# Simulate an install once and reuse the output.
+#
+# apt-get -s exits nonzero whenever anything is uninstallable (held packages,
+# unmet deps, a wrong release). That is information, not a reason to abort, so
+# we capture stdout+stderr and decide for ourselves.
+simulate() {
+  local opt=()
+  [[ "${1:-with}" == "without" ]] && opt=(--no-install-recommends)
+  apt-get install -s "${opt[@]}" "${AVAILABLE[@]}" 2>&1 || true
+}
+
+pkgs_from() { awk '/^Inst /{print $2}' <<<"$1" | sort -u; }
+count_of()  { grep -c . <<<"$1" || true; }
+
+say "Resolving dependencies (this takes a moment)"
+
+WITH_SIM="$(simulate with)"
+WITH_LIST="$(pkgs_from "$WITH_SIM")"
+WITH_COUNT="$(count_of "$WITH_LIST")"
+
+if [[ "$WITH_COUNT" -eq 0 ]]; then
+  warn "apt could not resolve an install plan. Its output was:"
+  sed 's/^/  /' <<<"$WITH_SIM" | tail -20
+  echo
+  warn "Common causes: wrong Debian release, missing non-free-firmware,"
+  warn "or 'apt update' not yet run. Nothing has been changed."
+  exit 1
+fi
+
+if [[ $COMPARE -eq 1 ]]; then
+  WITHOUT_LIST="$(pkgs_from "$(simulate without)")"
+  WITHOUT_COUNT="$(count_of "$WITHOUT_LIST")"
+
+  say "Comparison"
+  printf '  recommends ON  : %s packages\n' "$WITH_COUNT"
+  printf '  recommends OFF : %s packages\n' "$WITHOUT_COUNT"
+  printf '  difference     : %s packages\n\n' "$(( WITH_COUNT - WITHOUT_COUNT ))"
+
+  say "Packages that ONLY appear with recommends enabled:"
+  comm -23 <(printf '%s\n' "$WITH_LIST") <(printf '%s\n' "$WITHOUT_LIST") \
+    | sed 's/^/  /'
+
+  echo
+  say "Sanity check — is an actual desktop environment being pulled in?"
+  if grep -qxE 'gnome|gnome-core|gnome-shell|task-gnome-desktop|kde-plasma-desktop|plasma-workspace' <<<"$WITH_LIST"; then
+    warn "YES — a desktop metapackage is in the set. Investigate before proceeding."
+  else
+    echo "  No. Packages named gnome-*/libgnome-* are shared libraries and"
+    echo "  gsettings schemas, not the GNOME desktop. The desktop only arrives"
+    echo "  via the metapackages checked above, and none are present."
+  fi
+  echo
+fi
+
+say "Size"
+grep -E '^(After this operation|Need to get)' <<<"$WITH_SIM" | sed 's/^/  /' \
+  || echo "  (no size reported)"
+
+say "Total packages to be installed, including dependencies: $WITH_COUNT"
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  echo
+  say "Full resolved list:"
+  printf '%s\n' "$WITH_LIST" | sed 's/^/  /'
+  say "Dry run — nothing installed."
+  exit 0
+fi
+
+cat <<EOF
+
+Recommends are ENABLED (Debian's tested default).
+Review the numbers above. Run with --dry-run for the full package list,
+or --compare to see exactly what recommends is costing you.
+EOF
+
+read -rp $'\nProceed? [y/N] ' reply || true
+[[ "${reply:-}" == [Yy]* ]] || { echo "Aborted."; exit 0; }
+
+# ---------------------------------------------------------------------------
+# 5. Install
+# ---------------------------------------------------------------------------
+if [[ ${#AVAILABLE[@]} -eq 0 ]]; then
+  warn "Nothing to install."
+  exit 0
+elif [[ $LEAN -eq 1 ]]; then
+  say "Installing (no recommends — lean mode)"
+  sudo apt-get install -y --no-install-recommends "${AVAILABLE[@]}"
+else
+  # Split: documented exceptions go in lean, everything else the normal way.
+  NORMAL=(); LEANED=()
+  for p in "${AVAILABLE[@]}"; do
+    if in_lean "$p"; then LEANED+=("$p"); else NORMAL+=("$p"); fi
+  done
+
+  if [[ ${#LEANED[@]} -gt 0 ]]; then
+    say "Installing documented exceptions without recommends: ${LEANED[*]}"
+    sudo apt-get install -y --no-install-recommends "${LEANED[@]}"
+  fi
+
+  if [[ ${#NORMAL[@]} -gt 0 ]]; then
+    say "Installing (recommends enabled)"
+    sudo apt-get install -y "${NORMAL[@]}"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Services
+# ---------------------------------------------------------------------------
+say "Enabling services"
+sudo systemctl enable --now NetworkManager.service || warn "NetworkManager not enabled"
+sudo systemctl enable --now thermald.service 2>/dev/null || warn "thermald not enabled"
+sudo systemctl enable --now tlp.service 2>/dev/null || warn "tlp not enabled"
+systemctl --user enable --now pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null \
+  || warn "pipewire user units will start on next login"
+
+# TLP and power-profiles-daemon conflict; make sure only TLP is active.
+if systemctl is-enabled power-profiles-daemon.service >/dev/null 2>&1; then
+  warn "Disabling power-profiles-daemon (conflicts with TLP)"
+  sudo systemctl disable --now power-profiles-daemon.service
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Groups — brightnessctl needs `video`, some input tools need `input`
+# ---------------------------------------------------------------------------
+say "Adding you to video/input groups (log out for this to take effect)"
+sudo usermod -aG video,input "$USER"
+
+# ---------------------------------------------------------------------------
+# 8. Session environment
+#
+# IMPORTANT: ~/.config/environment.d/ is read by the *systemd user manager*.
+# It applies to systemd user units — it does NOT apply to sway's children
+# when you exec sway from a login shell. So we write the vars to a plain
+# file and source it from a wrapper. environment.d is still written so that
+# systemd-launched user services agree with the session.
+# ---------------------------------------------------------------------------
+say "Writing session environment"
+
+mkdir -p ~/.config/environment.d ~/.local/bin
+
+# One source of truth. Values are written verbatim to environment.d (systemd
+# format, no quoting) and shell-quoted for the sourceable file. Doing this by
+# hand with sed breaks on values containing ';' or spaces.
+SESSION_ENV=(
+  "XDG_CURRENT_DESKTOP=sway"
+  "XDG_SESSION_TYPE=wayland"
+  "XDG_SESSION_DESKTOP=sway"
+  "MOZ_ENABLE_WAYLAND=1"
+  "QT_QPA_PLATFORM=wayland;xcb"
+  "QT_WAYLAND_DISABLE_WINDOWDECORATION=1"
+  "_JAVA_AWT_WM_NONREPARENTING=1"
+  "ELECTRON_OZONE_PLATFORM_HINT=auto"
+  "XCURSOR_THEME=Adwaita"
+  "XCURSOR_SIZE=24"
+)
+
+# systemd environment.d: KEY=VALUE, unquoted.
+printf '%s\n' "${SESSION_ENV[@]}" > ~/.config/environment.d/10-sway.conf
+
+# Shell-sourceable: same values, properly quoted.
+{
+  echo '# Generated by bootstrap-sway. Sourced by ~/.local/bin/start-sway.'
+  for kv in "${SESSION_ENV[@]}"; do
+    printf 'export %s=%q\n' "${kv%%=*}" "${kv#*=}"
+  done
+} > ~/.config/sway-env.sh
+
+cat > ~/.local/bin/start-sway <<'EOF'
+#!/usr/bin/env bash
+# Wrapper so sway's children actually inherit the session environment.
+[ -f "$HOME/.config/sway-env.sh" ] && . "$HOME/.config/sway-env.sh"
+exec sway "$@"
+EOF
+chmod +x ~/.local/bin/start-sway
+
+# Your sway config must also push these into the systemd/dbus session, or
+# xdg-desktop-portal will pick the wrong backend and screen sharing dies
+# silently. Drop-in config so you don't have to edit your dotfiles.
+mkdir -p ~/.config/sway/config.d
+cat > ~/.config/sway/config.d/00-environment.conf <<'EOF'
+# Required for xdg-desktop-portal / screen sharing to work.
+exec systemctl --user import-environment DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP
+exec dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP
+EOF
+
+# ---------------------------------------------------------------------------
+# 9. Locking on suspend
+#
+# Deliberately NOT a systemd user unit: sleep.target does not exist in the
+# user manager, and WAYLAND_DISPLAY cannot be known ahead of time. swayidle's
+# before-sleep hook is the correct mechanism and runs inside your session.
+# Put this in your sway config:
+#
+#   exec swayidle -w \
+#     timeout 300 'swaylock -f' \
+#     timeout 600 'swaymsg "output * power off"' \
+#     resume 'swaymsg "output * power on"' \
+#     before-sleep 'swaylock -f'
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 10. Optional: start sway on tty1
+# ---------------------------------------------------------------------------
+if [[ $TTY_AUTOSTART -eq 1 ]]; then
+  # Append to the file bash ACTUALLY reads at login. Creating ~/.bash_profile
+  # where none existed stops bash reading ~/.profile — which is precisely what
+  # puts ~/.local/bin (and therefore start-sway) on PATH.
+  if [[ -f ~/.bash_profile ]]; then
+    PROFILE=~/.bash_profile
+  elif [[ -f ~/.bash_login ]]; then
+    PROFILE=~/.bash_login
+  else
+    PROFILE=~/.profile           # Debian's default; bash falls back to it
+  fi
+
+  say "Adding sway autostart to $PROFILE"
+  if grep -q 'start-sway' "$PROFILE" 2>/dev/null; then
+    warn "Already present, leaving it alone."
+  else
+    cat >> "$PROFILE" <<'EOF'
+
+# Start sway on tty1
+if [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${XDG_VTNR:-}" = "1" ]; then
+  exec "$HOME/.local/bin/start-sway"
+fi
+EOF
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+say "Done."
+cat <<'EOF'
+
+Next steps:
+  1. LOG OUT AND BACK IN — group changes (video/input) need a new session,
+     or brightness keys will not work.
+  2. Drop your dotfiles into ~/.config/sway and ~/.config/kitty.
+     Make sure your sway config has:  include ~/.config/sway/config.d/*
+     Otherwise the portal environment drop-in is ignored.
+  3. Start with:  ~/.local/bin/start-sway
+     Do NOT just run `sway` — the wrapper is what loads the session env.
+     (or re-run this script with --tty-autostart)
+  4. Nerd Font glyphs for waybar are NOT packaged in Debian. If your bar
+     config uses them, grab one manually:
+       mkdir -p ~/.local/share/fonts && cd ~/.local/share/fonts
+       # download a .ttf from github.com/ryanoasis/nerd-fonts, then:
+       fc-cache -fv
+
+Verify it worked:
+  echo $XDG_CURRENT_DESKTOP          # must print: sway
+  brightnessctl s 50%                # must not say "permission denied"
+  wpctl status                       # pipewire should list your card
+  /usr/libexec/xdg-desktop-portal -r # restart portals if sharing misbehaves
+
+  `sudo fwupdmgr refresh && sudo fwupdmgr update` — do this early, Lenovo
+  ships real firmware fixes for the T14 Gen 3 through LVFS.
+
+EOF
