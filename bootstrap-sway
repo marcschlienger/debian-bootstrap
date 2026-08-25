@@ -546,17 +546,27 @@ if [[ $TTY_AUTOSTART -eq 1 ]]; then
     PROFILE=~/.profile           # Debian's default; bash falls back to it
   fi
 
-  say "Adding sway autostart to $PROFILE"
-  if grep -q 'start-sway' "$PROFILE" 2>/dev/null; then
-    warn "Already present, leaving it alone."
-  else
-    cat >> "$PROFILE" <<'EOF'
+  # `read -d ''` hits EOF and returns 1; the block is still assigned.
+  read -r -d '' AUTOSTART <<'EOF' || true
 
 # Start sway on tty1
 if [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${XDG_VTNR:-}" = "1" ]; then
   exec "$HOME/.local/bin/start-sway"
 fi
 EOF
+
+  say "Adding sway autostart to $PROFILE"
+  if grep -q 'start-sway' "$PROFILE" 2>/dev/null; then
+    warn "Already present, leaving it alone."
+  elif [[ -L "$PROFILE" ]]; then
+    # A stow-managed symlink points into your dotfiles repo, so appending
+    # here would edit that repo behind your back — and the change would then
+    # follow you onto every other machine that stows it.
+    warn "$PROFILE is a symlink (stow-managed). Not writing through it."
+    echo "  Add this to the file in your dotfiles repo:"
+    printf '%s\n' "$AUTOSTART" | sed 's/^/    /'
+  else
+    printf '%s\n' "$AUTOSTART" >> "$PROFILE"
   fi
 fi
 

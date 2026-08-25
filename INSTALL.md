@@ -63,7 +63,7 @@ three layers at once later.
 
 - [ ] Get the scripts on the machine (mount the USB, or
       `sudo apt install git` and clone).
-- [ ] `chmod +x bootstrap-sway extras install-thirdparty appimage-manage build-emacs`
+- [ ] `chmod +x bootstrap-sway extras install-thirdparty appimage-manage build-emacs deploy-dotfiles`
 
 ---
 
@@ -83,10 +83,17 @@ three layers at once later.
 - [ ] **Log out and back in.** Non-negotiable — `video`/`input` group changes
       don't apply to an existing session, and without them brightness keys
       fail silently. → guide §3
-- [ ] **Put your dotfiles in place:** `~/.config/sway`, `~/.config/kitty`.
-      `stow` is installed by `bootstrap-sway` precisely so this step works
-      before you get to `./extras cli` — `stow -d ~/.dotfiles sway kitty` and
-      you're done.
+- [ ] **Deploy your dotfiles:**
+
+      ./deploy-dotfiles
+
+      Clones the repo to `~/.dotfiles` and stows every package. Debian ships
+      real files where dotfiles want to go (`~/.bashrc`, `~/.profile`), and
+      stow aborts a whole package rather than overwrite one — so the script
+      moves them to `*.pre-stow.<timestamp>` first. Re-running is a no-op.
+
+      ./deploy-dotfiles --list        # what's there, and what's deployed
+      ./deploy-dotfiles --dry-run     # change nothing, show the plan
 - [ ] **Set your fonts.** The script installed FiraCode Nerd Font and
       Symbols Nerd Font Mono into `~/.local/share/fonts` (it asks first; skip
       with `--no-fonts`). Point kitty at `FiraCode Nerd Font`, and put

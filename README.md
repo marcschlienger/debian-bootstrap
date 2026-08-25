@@ -24,6 +24,7 @@ The design bet, in three lines:
 | [`extras`](extras) | Optional software in named groups — `cli`, `editors`, `lsp`, `cpp`, `python`, `desktop`, `office`, `media`, `container`, and more. Nothing here is required for the desktop to work. |
 | [`install-thirdparty`](install-thirdparty) | The three applications Debian doesn't ship: Tailscale, Mullvad Browser, Cryptomator. Each uses a different channel; the rationale is documented per app. |
 | [`appimage-manage`](appimage-manage) | Puts an AppImage on `$PATH`, in fuzzel, and in your icon theme, using the `.desktop` file and icon already inside it. Also diagnoses the libfuse2 failure. |
+| [`deploy-dotfiles`](deploy-dotfiles) | Clones the dotfiles repo to `~/.dotfiles` and stows it, moving Debian's own `~/.bashrc`/`~/.profile` aside first so stow doesn't abort. Idempotent; `--list`, `--dry-run` and `--delete` do what you'd expect. |
 | [`build-emacs`](build-emacs) | Builds Emacs (pgtk, native-comp, tree-sitter) into a GNU Stow prefix, so versions stay trackable and removable. Check `apt policy emacs-pgtk` first — you may not need it. |
 
 ## Quick start
@@ -55,7 +56,12 @@ Start the session through the wrapper, never with a bare `sway`:
 ~/.local/bin/start-sway
 ```
 
-Then pick your software:
+Then your dotfiles, and your software:
+
+```bash
+./deploy-dotfiles
+```
+
 
 ```bash
 ./extras --list
