@@ -368,6 +368,16 @@ if [[ " ${SELECTED[*]} " == *" shell "* ]]; then
   [[ $MISSING_PLUGINS -eq 0 ]] \
     || warn "Your zshrc tests for these with [ -f ]/[ -d ], so a miss is silent."
 
+  # Present is not the same as effective. compinit scans fpath when it runs
+  # and never revisits it, so an `fpath=(.../zsh-completions/src $fpath)`
+  # line that executes AFTER compinit registers nothing at all — silently,
+  # with the directory sitting right there. The other two are sourced
+  # rather than autoloaded, so they do not care about the order.
+  echo "  note    zsh-completions only registers if its src is on fpath"
+  echo "          BEFORE compinit runs. Check the order across your zshrc"
+  echo "          and everything it sources:"
+  echo "            grep -rn 'compinit\|zsh-completions' ~/.zshrc ~/.zsh/"
+
   # --- The trap that makes this worth a hook instead of a note.
   #
   # bootstrap-sway --tty-autostart appends the tty1 exec to ~/.profile (or
