@@ -115,6 +115,10 @@ PKGS_FONTS=(
   fonts-noto-color-emoji
   fonts-firacode
   fonts-font-awesome   # waybar's default config expects these glyphs
+  fonts-inter          # UI font for titlebars, GTK and the bar. §4 tells you
+                       # to set this as the GTK font, so it has to exist —
+                       # a font named in a config but not installed falls
+                       # back silently to whatever fontconfig picks.
 )
 
 # T14 Gen 3 specifics. firmware-sof-signed is NOT optional — without it
