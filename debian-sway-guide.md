@@ -514,13 +514,28 @@ lon=13.4
 `brightness-night` is the setting people miss. Valid range is 0.1 to 1.0;
 below roughly 0.7 the screen starts to look murky rather than dim.
 
-For on-demand shifts, either tool's one-shot mode makes a good keybinding
-and exits immediately, so it does not conflict with a running daemon:
+**On-demand shifts do not work the way the man page implies.** Gamma is held
+by a live process. `zwlr_gamma_control_v1` gives one client exclusive access
+per output, and restores the original ramps the moment that client exits, so
+`gammastep -O 3500` fails in one of two ways: refused outright while the
+daemon holds the output — reported as "zero outputs support gamma
+correction" — or applied and then immediately reverted if no daemon is
+running. One-shot mode is inherited from redshift and X11, where gamma
+survived the process. Under Wayland it cannot.
+
+What works is restarting the daemon with fixed temperatures, so a live
+process holds the ramps:
 
 ```
-bindsym $mod+Shift+n exec gammastep -O 3500
-bindsym $mod+Shift+m exec gammastep -x
+# warm now, and stay warm
+bindsym $mod+Shift+n exec "pkill -x gammastep; gammastep -t 3500:3500"
+# back to automatic
+bindsym $mod+Shift+m exec "pkill -x gammastep; gammastep"
 ```
+
+Quote the whole command: sway parses `;` as its own command separator, so
+an unquoted `exec pkill -x gammastep; gammastep …` runs the second half as a
+sway command and silently does nothing useful.
 
 **When it does nothing at all**, check that the binary exists before
 anything else. `exec` failures in a sway config go to sway's stderr, which

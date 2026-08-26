@@ -727,10 +727,12 @@ line; neither is written for you, because both belong in your dotfiles.
 
     exec gammastep
 
-    # on demand, whatever the hour — these exit immediately, so they do
-    # not fight the running daemon
-    bindsym $mod+Shift+n exec gammastep -O 3500
-    bindsym $mod+Shift+m exec gammastep -x
+    # On demand. NOT `gammastep -O`: one client holds gamma exclusively per
+    # output and the ramps are restored when it exits, so a one-shot is
+    # either refused by the daemon or reverts instantly. Restart the daemon
+    # with fixed temperatures. Quote it — sway parses `;` itself.
+    bindsym $mod+Shift+n exec "pkill -x gammastep; gammastep -t 3500:3500"
+    bindsym $mod+Shift+m exec "pkill -x gammastep; gammastep"
 
 brightness-night is the part people miss: on a laptop panel in a dark room
 the backlight minimum is often still too bright, and this dims below it in
