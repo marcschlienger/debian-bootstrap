@@ -73,7 +73,13 @@ PKGS_SWAY=(
   kanshi          # per-output profiles — this is what makes docking sane
   xwayland        # X11 fallback for the apps that still need it
   wl-clipboard    # wl-copy / wl-paste
+  cliphist        # clipboard HISTORY. wl-clipboard alone keeps nothing, and
+                  # on Wayland a copied selection dies with the application
+                  # that owned it.
   grim slurp      # screenshots + region select
+  grimshot        # the wrapper that makes grim/slurp usable from a keybind.
+                  # Its own package here — not shipped with sway, and not in
+                  # sway-contrib, which Debian does not carry at all.
   brightnessctl   # backlight keys
   playerctl       # media keys
   mate-polkit     # polkit auth agent (lightest sane option on Debian)

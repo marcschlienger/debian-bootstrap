@@ -369,8 +369,57 @@ Some apps ignore it; those need `~/.config/<app>/<app>-flags.conf` containing
 ### No clipboard history
 
 `wl-clipboard` gives you copy/paste but nothing persistent, and copied content
-**dies with the source application** on Wayland. Add `clipman` or `cliphist`
-plus a `wl-paste --watch` line in your sway config if that bothers you.
+**dies with the source application** on Wayland. `cliphist` is installed for
+this; it needs two watchers and a picker binding in your sway config:
+
+```
+exec wl-paste --type text --watch cliphist store
+exec wl-paste --type image --watch cliphist store
+
+bindsym $mod+grave exec cliphist list | fuzzel --dmenu --with-nth 2 | cliphist decode | wl-copy
+```
+
+Screenshots are the same shape — `grim` and `slurp` are the primitives,
+`grimshot` is the wrapper worth binding:
+
+```
+bindsym Print          exec grimshot --notify savecopy output
+bindsym $mod+Print     exec grimshot --notify savecopy window
+bindsym Control+Print  exec grimshot --notify savecopy area
+```
+
+
+### Volume and media keys do nothing
+
+Nothing binds them for you. `wpctl` comes with wireplumber, which is already
+installed, so this needs no extra package:
+
+```
+bindsym --locked XF86AudioRaiseVolume exec wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+
+bindsym --locked XF86AudioLowerVolume exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
+bindsym --locked XF86AudioMute        exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+bindsym --locked XF86AudioMicMute     exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
+
+bindsym --locked XF86MonBrightnessUp   exec brightnessctl set 5%+
+bindsym --locked XF86MonBrightnessDown exec brightnessctl set 5%-
+
+bindsym XF86AudioPlay exec playerctl play-pause
+bindsym XF86AudioNext exec playerctl next
+bindsym XF86AudioPrev exec playerctl previous
+```
+
+`--locked` is what makes them work while the screen is locked, which is the
+whole point of media keys.
+
+`-l 1.0` caps the volume at 100%. Without it, repeated presses happily push
+past unity into distortion — `pactl` has no equivalent, so this is one place
+the native tool is genuinely better.
+
+**`pactl` is the other option and it works**, since pipewire-pulse provides
+the interface — but the binary lives in `pulseaudio-utils`, which
+`pipewire-pulse` only *Suggests*. Suggests are never installed, not even
+with recommends enabled, so `pactl` bindings on a fresh machine fail
+silently. If you prefer them, install that package deliberately.
 
 ### No blue light filter
 
