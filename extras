@@ -90,7 +90,10 @@ GROUP_desktop=(
 
 GROUP_media=(
   mpv
-  imv             # lightweight wayland image viewer
+  imv             # lightweight wayland image viewer; the xdg-open default
+  nsxiv           # thumbnail grid, marks, and a key-handler hook that imv
+                  # has no equivalent for. X11 only, so it runs under
+                  # XWayland — worth it for the scripting.
   ffmpeg
   imagemagick
   yt-dlp
