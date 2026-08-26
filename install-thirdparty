@@ -789,10 +789,34 @@ EOF
 # ---------------------------------------------------------------------------
 # Vendor shell installers — the unverified channel.
 #
-# Some tools ship only as `curl … | sh`. There is no signature, no checksum,
-# and no apt integration: you are trusting TLS and the vendor, and nothing
-# else. Every other app in this file has a signed repository behind it, so
-# these are called out rather than quietly treated the same.
+# These use the installer each vendor documents as its recommended route.
+# There is no signature, no checksum, and no apt integration: you are
+# trusting TLS and the vendor, and nothing else. Every other app in this
+# file has a signed repository behind it, so these are called out rather
+# than quietly treated the same.
+#
+# NOT because nothing better exists — a deliberate choice, recorded so it
+# does not read later as an oversight:
+#
+#   - Claude Code HAS a signed apt repository:
+#       https://downloads.claude.ai/claude-code/apt/stable stable main
+#     Origin Anthropic, amd64 and arm64, signed by
+#     31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE ("Anthropic Claude Code
+#     Release Signing"). Note the key is served from the claude-desktop
+#     path — .../claude-desktop/key.asc — and the claude-code one 404s,
+#     which is easy to read as "there is no repo".
+#   - Codex signs its release binaries with Sigstore. The bundles are the
+#     .sigstore assets on the GitHub release, the identity is the
+#     rust-release.yml workflow in openai/codex, and cosign is packaged in
+#     trixie, so verifying needs nothing unpackaged.
+#   - Both are in nixpkgs (pkgs/by-name/cl/claude-code, .../co/codex),
+#     which is what guide §6 earmarks Nix for.
+#
+# The vendor installers win here on cost, not on security: Claude Code
+# self-updates after the first run, Codex needs one re-run to upgrade, and
+# neither justifies a second package manager or a per-release cosign dance.
+# If the freshness layer from §6 ever gets installed for neovim and the
+# language servers, revisit this — at that point Nix is already there.
 #
 # What this does do is refuse to pipe. `curl … | sh` is worse than fetching
 # and then running, for two concrete reasons:
@@ -841,6 +865,9 @@ run_vendor_installer() {   # $1 = name, $2 = url, $3 = interpreter
 # ---------------------------------------------------------------------------
 # Claude Code — Anthropic's CLI. Native install, no Node required, and it
 # updates itself in the background afterwards, so this runs once.
+#
+# A signed apt repository exists and is not used here; see the note above
+# run_vendor_installer for the reasoning and the repo details.
 # ---------------------------------------------------------------------------
 install_claude_code() {
   say "Claude Code"
@@ -859,6 +886,10 @@ install_claude_code() {
 # deliberately not used: nothing else here needs Node, and pulling in a whole
 # toolchain for one binary is a poor trade. Unlike Claude Code, this one does
 # not self-update — re-run to upgrade.
+#
+# The release binaries are Sigstore-signed and cosign is in trixie, so a
+# verified install is possible; see the note above run_vendor_installer for
+# why this takes the documented installer instead.
 # ---------------------------------------------------------------------------
 install_codex() {
   say "Codex"
