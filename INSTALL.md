@@ -106,6 +106,17 @@ three layers at once later.
       none at all, so keys arriving by repo or USB stick land at 0644 and
       ssh refuses them. Note the error names the key file even when the
       real offender is `$HOME` or `~/.ssh` being group-writable.
+- [ ] **More fonts**, if the two from `bootstrap-sway` aren't enough:
+
+      ./install-fonts --list-nerd            # 72 patched families upstream
+      ./install-fonts nerd Hack Iosevka
+      ./install-fonts aporetic               # Protesilaos's Iosevka build
+      ./install-fonts local ~/path/to/fonts  # files and archives you have
+
+      Licensed fonts install from wherever you keep them and never enter a
+      repo. Bitmap fonts need `--enable-bitmaps`, or fontconfig ignores them
+      and nothing says so.
+
 - [ ] **Set your fonts.** The script installed FiraCode Nerd Font and
       Symbols Nerd Font Mono into `~/.local/share/fonts` (it asks first; skip
       with `--no-fonts`). Point kitty at `FiraCode Nerd Font`, and put
