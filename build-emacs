@@ -78,7 +78,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
   say "Removing $STOW_DIR/$PKG"
   sudo rm -rf "${STOW_DIR:?}/${PKG:?}"
   warn "Native-compiled cache is version-specific. Consider clearing it:"
-  warn "  rm -rf ~/.emacs.d/eln-cache  (or ~/.config/emacs/eln-cache)"
+  warn "  ls ~/.emacs.d/eln-cache   # remove this version's directory only"
   say "Done."
   exit 0
 fi
@@ -296,14 +296,62 @@ say "Enable it with: systemctl --user enable --now emacs"
 # ---------------------------------------------------------------------------
 # 7. Stale native-comp cache
 # ---------------------------------------------------------------------------
-for cache in "$HOME/.emacs.d/eln-cache" "$HOME/.config/emacs/eln-cache"; do
-  if [[ -d "$cache" ]]; then
-    warn "Stale native-comp cache found: $cache"
-    warn "It is keyed to the previous build and will silently accumulate."
-    read -rp "Remove it? [y/N] " r || true
-    [[ "${r:-}" == [Yy]* ]] && rm -rf "$cache"
-  fi
-done
+# The cache is keyed by version AND build hash — 30_2-1eff7896,
+# 31_1-ec512619 — so each rebuild leaves the previous directory behind and
+# they accumulate silently.
+#
+# Removing the whole cache is the wrong fix: it takes the directory
+# belonging to the Emacs just built along with the dead ones, and that one
+# gets recompiled from scratch on next use. So only the others go.
+#
+# The name is asked of the new binary rather than derived from the version
+# argument — a pretest or git build names itself differently, and guessing
+# wrong here means deleting the live cache.
+CURRENT_ELN="$("$PREFIX/bin/emacs" --batch --eval '(princ comp-native-version-dir)' 2>/dev/null || true)"
+
+if [[ -z "$CURRENT_ELN" ]]; then
+  warn "Could not ask the new Emacs for its native-comp directory name."
+  warn "Leaving every eln-cache alone rather than guessing which is stale."
+else
+  say "This build's native-comp directory: $CURRENT_ELN"
+  for cache in "$HOME/.emacs.d/eln-cache" "$HOME/.config/emacs/eln-cache"; do
+    [[ -d "$cache" ]] || continue
+
+    stale=()
+    while IFS= read -r d; do
+      [[ "$(basename "$d")" == "$CURRENT_ELN" ]] || stale+=("$d")
+    done < <(find "$cache" -mindepth 1 -maxdepth 1 -type d)
+
+    [[ ${#stale[@]} -gt 0 ]] || continue
+
+    warn "Native-comp directories in $cache left by earlier builds:"
+    for d in "${stale[@]}"; do
+      printf '    %-24s %s\n' "$(basename "$d")" "$(du -sh "$d" 2>/dev/null | cut -f1)"
+    done
+    r=""
+    read -rp "Remove them? [y/N] " r || true
+    if [[ "${r:-}" == [Yy]* ]]; then
+      rm -rf "${stale[@]}"
+      say "Removed ${#stale[@]}, kept $CURRENT_ELN"
+    fi
+  done
+fi
+
+# A version bump also invalidates every .elc under elpa: a package compiled
+# by the old Emacs can reference symbols the new one generates differently,
+# and it fails at load with "Symbol's value as variable is void" rather than
+# anything mentioning a stale build.
+cat <<'EOF'
+
+  Byte-compiled packages are version-specific too. After a version bump,
+  recompile them or expect void-variable errors on first load:
+
+    emacs --batch --eval '(byte-recompile-directory (expand-file-name "~/.emacs.d/elpa") 0 t)'
+
+  The trailing t forces it — the stale .elc files look newer than their .el
+  and are otherwise skipped.
+
+EOF
 
 # ---------------------------------------------------------------------------
 say "Done."
