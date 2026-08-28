@@ -351,6 +351,11 @@ cat <<'EOF'
   The trailing t forces it — the stale .elc files look newer than their .el
   and are otherwise skipped.
 
+  Better: have your Emacs config do this itself. Recording emacs-version at
+  startup and comparing it on the next launch turns this into one slow start
+  after an upgrade instead of a cryptic error — straight.el does exactly
+  that, package.el does not.
+
 EOF
 
 # ---------------------------------------------------------------------------
