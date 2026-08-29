@@ -256,6 +256,20 @@ Run all of these. Fix anything that fails *now*.
       It pauses after `configure` — confirm pgtk, native-comp and tree-sitter
       all report yes before committing to 40 minutes.
 
+- [ ] **LaTeX**, if you write any — upstream's installer rather than
+      Debian's packages, so that `tlmgr install` works and the Mac runs the
+      same TeX Live:
+
+      ./install-thirdparty texlive
+
+      It verifies the download against TUG's signature before running
+      anything, then hands over to the interactive installer — the same one
+      MacTeX wraps. Pick the scheme there; anything missing later is one
+      `tlmgr install` away.
+
+      Debian patches `tlmgr` so it cannot install packages, which is the
+      whole reason for not using `texlive-full` here. → guide §8
+
 ---
 
 ## Phase 8 — Make it repeatable
