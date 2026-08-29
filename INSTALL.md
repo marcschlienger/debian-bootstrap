@@ -117,9 +117,9 @@ three layers at once later.
       repo. Bitmap fonts need `--enable-bitmaps`, or fontconfig ignores them
       and nothing says so.
 
-- [ ] **Set your fonts.** The script installed IosevkaTerm Nerd Font and
+- [ ] **Set your fonts.** The script installed FiraCode Nerd Font and
       Symbols Nerd Font Mono into `~/.local/share/fonts` (it asks first; skip
-      with `--no-fonts`). Point kitty at `IosevkaTerm Nerd Font Mono`, and put
+      with `--no-fonts`). Point kitty at `FiraCode Nerd Font Mono`, and put
       `"Symbols Nerd Font Mono"` last in waybar's `font-family` — it's the
       fallback that makes icons render whatever else the bar is set to.
 - [ ] **Your sway config must contain `include ~/.config/sway/config.d/*`** or

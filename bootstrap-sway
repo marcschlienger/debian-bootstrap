@@ -450,13 +450,15 @@ EOF
 #   Symbols Nerd Font Mono   glyphs only, no letters. fontconfig falls back
 #                            to it, so the bar gets its icons whatever font
 #                            it is actually set to.
-#   IosevkaTerm Nerd Font    a patched monospace face for kitty. The Term
-#                            variant is the terminal-fitted one: ligatures
-#                            dropped, glyph widths sized to the cell. It
-#                            shares Iosevka's skeleton with the Aporetic
-#                            faces Emacs uses, so code looks the same in
-#                            both — but unlike Aporetic it is Nerd-patched,
-#                            so the terminal needs no fallback chain.
+#   FiraCode Nerd Font       a patched monospace face for kitty. Chosen on
+#                            measured advance width per em: Fira Code 0.615,
+#                            IBM Plex 0.600, Aporetic 0.525, stock Iosevka
+#                            0.500. Iosevka is the deliberate outlier and is
+#                            too crowded to read in a terminal all day; Plex
+#                            is wide enough but has the smallest x-height of
+#                            the wide fonts, which reads as faint. Debian's
+#                            fonts-firacode, installed above, is the
+#                            unpatched original and has none of the glyphs.
 #
 # Per-user, into ~/.local/share/fonts: none of this needs root, and a font
 # out of a GitHub release has no business in /usr/share.
@@ -507,7 +509,7 @@ else
   echo
   echo "Nerd Fonts are not in Debian. These two come from GitHub releases:"
   echo "  $NERD_BASE/NerdFontsSymbolsOnly.tar.xz   (bar icons)"
-  echo "  $NERD_BASE/IosevkaTerm.tar.xz            (terminal)"
+  echo "  $NERD_BASE/FiraCode.tar.xz               (terminal)"
   reply=""
   read -rp $'\nDownload and install them into ~/.local/share/fonts? [Y/n] ' reply || true
   if [[ "${reply:-}" == [Nn]* ]]; then
@@ -515,7 +517,7 @@ else
   else
     mkdir -p "$FONT_DIR"
     install_nerd_font NerdFontsSymbolsOnly SymbolsNerdFont || true
-    install_nerd_font IosevkaTerm          IosevkaTermNerdFont || true
+    install_nerd_font FiraCode             FiraCodeNerdFont || true
 
     say "Rebuilding the font cache"
     fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || warn "fc-cache failed"
@@ -525,8 +527,8 @@ else
     # sends you debugging the wrong thing.
     fc-list | grep -qi 'Symbols Nerd Font' \
       || warn "Symbols Nerd Font did not register — check: fc-list | grep -i nerd"
-    fc-list | grep -qi 'IosevkaTerm Nerd Font' \
-      || warn "IosevkaTerm Nerd Font did not register — check: fc-list | grep -i nerd"
+    fc-list | grep -qi 'FiraCode Nerd Font' \
+      || warn "FiraCode Nerd Font did not register — check: fc-list | grep -i nerd"
   fi
 fi
 
@@ -760,7 +762,7 @@ Next steps:
      Do NOT just run `sway` — the wrapper is what loads the session env.
      (or re-run this script with --tty-autostart)
   4. Point your configs at the Nerd Fonts this script installed:
-       kitty:   font_family IosevkaTerm Nerd Font Mono
+       kitty:   font_family FiraCode Nerd Font Mono
        waybar:  font-family: "Inter", "Symbols Nerd Font Mono";
      The Symbols face is glyphs only — it is the fontconfig fallback that
      makes icons work in any font, so keep it last in the list.
