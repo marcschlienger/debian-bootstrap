@@ -18,7 +18,7 @@ say()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
-APPS=(tailscale mullvad-browser cryptomator yazi obsidian claude-code codex veracrypt)
+APPS=(tailscale mullvad-browser cryptomator yazi obsidian claude-code codex veracrypt texlive texlive-dummy)
 
 # ---------------------------------------------------------------------------
 # First installable name from a list.
@@ -1004,6 +1004,194 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# TeX Live — upstream's own installer, not Debian's texlive-* packages.
+#
+# This is a deliberate exception to the "boring base" rule, for two reasons:
+#
+#   - Debian patches tlmgr so it cannot install packages. On a Debian TeX
+#     Live you get exactly what the release shipped, and a CTAN package that
+#     is not in the archive is simply unavailable until the next Debian
+#     release. Upstream gives you working `tlmgr install`.
+#   - MacTeX on the other machine IS upstream TeX Live. Installing it here
+#     too means one TeX Live, one tlmgr, and documents that build the same
+#     on both.
+#
+# The cost is that apt no longer manages it: updates come from tlmgr, and
+# apt does not know TeX exists. See the equivs step at the end for what that
+# breaks and how to defuse it.
+#
+# Everything is verified. TUG signs the checksum file, not the tarball, so
+# the chain is: signature -> checksum file -> tarball.
+# ---------------------------------------------------------------------------
+TEXLIVE_MIRROR="https://mirror.ctan.org/systems/texlive/tlnet"
+TEXLIVE_KEY_URL="https://tug.org/texlive/files/texlive.asc"
+# Published at https://tug.org/texlive/signing.html — check it there once.
+TEXLIVE_FPR="C78B82D8C79512F79CC0D7C80D5E5D9106BAB6BC"
+
+install_texlive() {
+  if command -v tlmgr >/dev/null; then
+    say "TeX Live is already installed: $(tlmgr --version 2>/dev/null | head -1)"
+    warn "To update it, use tlmgr rather than this script:"
+    warn "  sudo tlmgr update --self --all"
+    return 0
+  fi
+
+  # install-tl is Perl, and fetches with wget. Debian minimal has neither
+  # guaranteed, and the failure without wget is a Perl error about a missing
+  # download method rather than anything mentioning wget.
+  say "Installing what install-tl needs"
+  sudo apt-get install -y perl wget
+
+  local tmp
+  tmp="$(mktemp -d)" || die "mktemp failed"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+
+  say "Downloading the installer"
+  fetch_to "$TEXLIVE_MIRROR/install-tl-unx.tar.gz"            "$tmp/install-tl-unx.tar.gz" \
+    || die "Could not download the installer"
+  fetch_to "$TEXLIVE_MIRROR/install-tl-unx.tar.gz.sha512"     "$tmp/sha512" \
+    || die "Could not download the checksum"
+  fetch_to "$TEXLIVE_MIRROR/install-tl-unx.tar.gz.sha512.asc" "$tmp/sha512.asc" \
+    || die "Could not download the signature"
+
+  # --- The key, compared against a published fingerprint. Importing a key
+  #     from the same place as the thing it signs proves nothing by itself.
+  if ! gpg --list-keys "$TEXLIVE_FPR" >/dev/null 2>&1; then
+    local fpr
+    fetch_to "$TEXLIVE_KEY_URL" "$tmp/texlive.asc" || die "Could not fetch the TeX Live key"
+    fpr="$(gpg --show-keys --with-colons "$tmp/texlive.asc" 2>/dev/null | awk -F: '/^fpr/{print $10; exit}')"
+    echo "  key fingerprint: ${fpr:-<unreadable>}"
+    echo "  expected:        $TEXLIVE_FPR"
+    [[ "$fpr" == "$TEXLIVE_FPR" ]] \
+      || die "Fingerprint mismatch. Do not import this key; check tug.org/texlive/signing.html"
+    say "Fingerprint matches. Importing."
+    gpg --quiet --import "$tmp/texlive.asc" || die "Could not import the key"
+  else
+    say "TeX Live signing key already in your keyring"
+  fi
+
+  # --- Signature first, then the checksum it vouches for, then the tarball.
+  verify_detached "$tmp/sha512" "$tmp/sha512.asc" \
+    || die "Stopping: the checksum file is not signed by the TeX Live key."
+
+  say "Checking the tarball against the signed checksum"
+  ( cd "$tmp" && sha512sum -c --status sha512 ) \
+    || die "Checksum mismatch — the download does not match what TUG signed."
+  say "Verified."
+
+  tar -xzf "$tmp/install-tl-unx.tar.gz" -C "$tmp" || die "Could not extract the installer"
+  local dir
+  dir="$(find "$tmp" -maxdepth 1 -type d -name 'install-tl-*' | head -1)"
+  [[ -n "$dir" ]] || die "Could not find the unpacked installer"
+
+  cat <<'EOF'
+
+  Handing over to install-tl now. It is interactive and it is the same
+  installer MacTeX wraps, so this is the familiar screen.
+
+  Worth knowing before you choose:
+
+    scheme-full      everything, about 8 GB. What MacTeX installs.
+    scheme-medium    LaTeX plus the common packages, about 2.5 GB.
+    scheme-basic     LaTeX and little else, about 350 MB.
+
+  Anything missing later is one `tlmgr install <package>` away — which is
+  the entire reason for using this installer rather than Debian's.
+
+  It installs into /usr/local/texlive/<year>/, which needs root, so this
+  runs under sudo.
+
+EOF
+  local r=""
+  read -rp "Start the installer? [Y/n] " r || true
+  [[ "${r:-y}" != [Nn]* ]] || { warn "Skipped. The installer is at $dir/install-tl"; return 0; }
+
+  sudo "$dir/install-tl" || die "install-tl exited non-zero"
+
+  cat <<'EOF'
+
+  Two things to finish.
+
+  1. PATH. TeX Live installs to /usr/local/texlive/<year>/bin/x86_64-linux,
+     which is not on PATH by default. The zsh config in the dotfiles repo
+     already globs for it and picks the newest year, so a new login is
+     enough. Confirm with:
+
+       which pdflatex latexmk
+
+  2. apt does not know TeX exists. Anything that Depends on texlive-* will
+     want to pull Debian's TeX Live alongside this one — several gigabytes
+     of duplicate, and two sets of binaries competing on PATH. The fix is a
+     dummy package that satisfies those dependencies:
+
+       sudo apt install equivs
+       ./install-thirdparty texlive-dummy
+
+     Only needed if apt actually tries it. Nothing here depends on texlive
+     today, so this can wait until it bites.
+
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# The equivs dummy package described above. Separate because it is only
+# wanted once apt actually tries to pull Debian's TeX Live, and because it
+# is easier to adjust the Provides list when it is visible on its own.
+# ---------------------------------------------------------------------------
+install_texlive_dummy() {
+  command -v tlmgr >/dev/null \
+    || warn "No tlmgr on PATH — is upstream TeX Live actually installed?"
+  command -v equivs-build >/dev/null || sudo apt-get install -y equivs
+
+  local tmp year
+  tmp="$(mktemp -d)" || die "mktemp failed"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+
+  # Match the year out of the path rather than counting directories up from
+  # the binary: tlmgr sits at .../texlive/<year>/bin/<platform>/tlmgr, and
+  # miscounting yields "bin", which is not a valid Debian version.
+  local tlpath
+  tlpath="$(command -v tlmgr 2>/dev/null || true)"
+  if [[ "$tlpath" =~ /texlive/([0-9]{4})/ ]]; then
+    year="${BASH_REMATCH[1]}"
+  else
+    year="$(date +%Y)"
+    warn "Could not read the TeX Live year from '$tlpath'; using $year"
+  fi
+
+  # The Provides list covers what pulls TeX in practice. It is not
+  # exhaustive — apt will tell you the name it wanted, and adding it here is
+  # a one-line edit.
+  cat > "$tmp/texlive-local" <<EOF
+Section: misc
+Priority: optional
+Standards-Version: 3.9.2
+Package: texlive-local
+Version: ${year:-9999}
+Provides: texlive, texlive-base, texlive-binaries, texlive-latex-base,
+ texlive-latex-recommended, texlive-latex-extra, texlive-fonts-recommended,
+ texlive-fonts-extra, texlive-plain-generic, texlive-pictures,
+ texlive-science, texlive-xetex, texlive-luatex, texlive-lang-german,
+ texlive-lang-english, texlive-bibtex-extra, latexmk, biber, dvipng, dvisvgm
+Description: Dummy package satisfying texlive dependencies
+ Upstream TeX Live is installed under /usr/local/texlive, which apt knows
+ nothing about. This package exists so apt does not install Debian's TeX
+ Live alongside it.
+EOF
+
+  say "Building the dummy package"
+  ( cd "$tmp" && equivs-build texlive-local ) || die "equivs-build failed"
+  local deb
+  deb="$(find "$tmp" -maxdepth 1 -name 'texlive-local_*.deb' | head -1)"
+  [[ -n "$deb" ]] || die "equivs-build produced no .deb"
+
+  sudo apt-get install -y "$deb" || die "Could not install the dummy package"
+  say "Installed. apt now believes texlive is present."
+}
+
+# ---------------------------------------------------------------------------
 if [[ $# -eq 0 ]]; then
   echo "Usage: $0 [--list] [--all] <app>..."; exit 1
 fi
@@ -1038,6 +1226,8 @@ for app in "${UNIQUE[@]}"; do
     claude-code)     install_claude_code ;;
     codex)           install_codex ;;
     veracrypt)       install_veracrypt ;;
+    texlive)         install_texlive ;;
+    texlive-dummy)   install_texlive_dummy ;;
   esac
 done
 
