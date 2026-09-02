@@ -72,9 +72,18 @@ GROUP_spell=(
   # hunspell-en-gb   # add if you write British English
   # Jinx, the Emacs spell checker, builds a small C module against libenchant
   # the first time it runs, so it needs the headers, pkg-config and a
-  # compiler. Enchant speaks to hunspell underneath, so the dictionaries above
-  # serve both and nothing is duplicated. Without these Emacs falls back to
-  # Flyspell on its own — see the spell checking section of emacs-init.org.
+  # compiler. Without these Emacs falls back to Flyspell on its own — see the
+  # spell checking section of emacs-init.org.
+  #
+  # Enchant does not check spelling itself; it dispatches to whichever
+  # provider it was built with. Confirm that it reaches hunspell here rather
+  # than aspell, because aspell does not decompose German compounds and will
+  # flag ordinary words like Hausaufgabenbetreuung:
+  #
+  #   enchant-lsmod-2 -lang de_DE
+  #
+  # On macOS this check fails — Homebrew's enchant has no hunspell provider —
+  # so the two machines genuinely differ here.
   libenchant-2-dev
   pkg-config
   build-essential
