@@ -87,9 +87,11 @@ GROUP_spell=(
   # the provider and macos-bootstrap's install-enchant-hunspell shows how to
   # add one. English stays on aspell either way: enchant's own ordering file
   # prefers it for en_US and en_GB, and English does not compound.
-  libenchant-2-dev
+  libenchant-2-dev   # the library and headers Jinx's module builds against
   pkg-config
   build-essential
+  enchant-2          # not used by Jinx; provides enchant-lsmod-2 for the
+                     # provider check below
 )
 
 # GUI odds and ends that a bare WM leaves you without.
