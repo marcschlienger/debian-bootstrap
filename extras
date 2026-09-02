@@ -70,6 +70,14 @@ GROUP_spell=(
   hunspell-en-us
   hunspell-de-de
   # hunspell-en-gb   # add if you write British English
+  # Jinx, the Emacs spell checker, builds a small C module against libenchant
+  # the first time it runs, so it needs the headers, pkg-config and a
+  # compiler. Enchant speaks to hunspell underneath, so the dictionaries above
+  # serve both and nothing is duplicated. Without these Emacs falls back to
+  # Flyspell on its own — see the spell checking section of emacs-init.org.
+  libenchant-2-dev
+  pkg-config
+  build-essential
 )
 
 # GUI odds and ends that a bare WM leaves you without.
