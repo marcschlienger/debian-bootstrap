@@ -211,6 +211,9 @@ GROUP_lsp=(
   # per-user fallback rather than leaving you with a silently absent server.
   lua-language-server    # Lua      (fallback: upstream release tarball)
   texlab                 # LaTeX    (fallback: cargo install --locked texlab)
+  gopls                  # Go       (fallback: go install golang.org/x/tools/gopls@latest)
+                         #          needs the go toolchain from GROUP_go, which
+                         #          gopls also execs at run time to analyse modules
   # Tree-sitter grammars are compiled on demand by Emacs, which needs git
   # plus a working C/C++ toolchain and linker.
   build-essential
