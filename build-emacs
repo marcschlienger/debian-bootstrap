@@ -7,16 +7,19 @@
 #              tree-sitter, and the usual image/JSON/sqlite support.
 #
 # Before you run this: check whether you actually need to.
-#   apt policy emacs-pgtk
+#   apt policy emacs-pgtk                     # what the distribution offers
+#   https://ftp.gnu.org/gnu/emacs/            # what upstream has released
 # Debian's package is built with native-comp, tree-sitter and pgtk already.
-# If the version there is good enough, use it and skip all of this.
+# If the version it offers is recent enough, use it and skip all of this: a
+# distribution package is upgraded and security-patched for you, a Stow tree
+# is not. Build only for a release Debian has not packaged yet.
 #
 # Usage:
-#   ./build-emacs 30.2              # build and install version 30.2
-#   ./build-emacs 30.2 --deps-only  # just install build dependencies
-#   ./build-emacs 30.2 --no-aot     # faster build, lazy native-comp
+#   ./build-emacs 31.1              # build and install version 31.1
+#   ./build-emacs 31.1 --deps-only  # just install build dependencies
+#   ./build-emacs 31.1 --no-aot     # faster build, lazy native-comp
 #   ./build-emacs --list-installed  # show Stow-managed Emacs versions
-#   ./build-emacs --uninstall 30.2  # unstow and remove that version
+#   ./build-emacs --uninstall 31.1  # unstow and remove that version
 #
 set -euo pipefail
 
@@ -179,21 +182,73 @@ fi
 # 3. Fetch and verify source
 # ---------------------------------------------------------------------------
 TARBALL="emacs-${VERSION}.tar.xz"
-URL="https://ftpmirror.gnu.org/emacs/${TARBALL}"
+
+# GNU asks that downloads go through the mirror redirector, which picks a
+# nearby mirror and is normally the faster of the two, so it is tried first.
+# It is also the one that can fail: the redirector has been seen to accept a
+# connection and then send nothing, and a mirror may not yet carry a release
+# that is only days old — the GNU mirror page tells you to check each mirror's
+# timestamp for exactly that reason. ftp.gnu.org is canonical and always
+# current, so it is the fallback and its verdict is the one believed.
+GNU_HOSTS=(
+  "https://ftpmirror.gnu.org/emacs"
+  "https://ftp.gnu.org/gnu/emacs"
+)
+
+FETCH_DIAGNOSIS=""
+
+# fetch_from_gnu FILENAME — download into the current directory, trying each
+# host in turn. Returns 0 on success; on failure sets FETCH_DIAGNOSIS to a
+# message that distinguishes a version that does not exist from a network that
+# would not answer. Callers decide whether that is fatal.
+# A second argument of "quiet" suppresses curl's progress meter, which is
+# worth watching for the 55 MB tarball and only noise for the signature.
+fetch_from_gnu() {
+  local name="$1" quiet="${2:-}" host code last=""
+
+  for host in "${GNU_HOSTS[@]}"; do
+    say "Fetching ${name} from ${host}"
+    # --speed-limit/--speed-time abort a connection that opens and then
+    # stalls, which --connect-timeout alone does not catch.
+    if code="$(curl -fL -o "$name" -w '%{http_code}' \
+                    --connect-timeout 15 \
+                    --speed-limit 1024 --speed-time 30 \
+                    --max-time 1800 \
+                    ${quiet:+--no-progress-meter} \
+                    "${host}/${name}")"; then
+      return 0
+    fi
+    last="$code"
+    rm -f "$name"
+    warn "${host} did not serve it (HTTP ${code:-no response})"
+  done
+
+  # ftp.gnu.org is last, so its answer is the real one: a 404 there means the
+  # file genuinely is not published.
+  if [[ "$last" == "404" ]]; then
+    FETCH_DIAGNOSIS="No ${name} on ftp.gnu.org, so that version is not published.
+Check the list of releases at https://ftp.gnu.org/gnu/emacs/"
+  else
+    FETCH_DIAGNOSIS="Could not download ${name} from either GNU host.
+Both the mirror redirector and ftp.gnu.org failed to answer, so this is a
+network or mirror problem rather than a wrong version number: a version that
+does not exist answers 404 and is reported as such."
+  fi
+  return 1
+}
 
 mkdir -p "$SRC_DIR"
 cd "$SRC_DIR"
 
 if [[ ! -f "$TARBALL" ]]; then
-  say "Downloading $TARBALL"
-  curl -fL -o "$TARBALL" "$URL" || die "Download failed — check the version number exists"
+  fetch_from_gnu "$TARBALL" || die "$FETCH_DIAGNOSIS"
 else
   say "Using cached $TARBALL"
 fi
 
 say "Verifying GPG signature"
 if [[ ! -f "${TARBALL}.sig" ]]; then
-  curl -fLs -o "${TARBALL}.sig" "${URL}.sig" || warn "Could not fetch signature"
+  fetch_from_gnu "${TARBALL}.sig" quiet || warn "$FETCH_DIAGNOSIS"
 fi
 if [[ -f "${TARBALL}.sig" ]]; then
   if gpg --verify "${TARBALL}.sig" "$TARBALL" 2>/dev/null; then
