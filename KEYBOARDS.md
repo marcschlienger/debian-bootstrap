@@ -12,13 +12,20 @@ this complete bottom-row order:
 
     Alt  Super  Control  Space  Control  Super  Right-Alt  Fn
 
-Kanata leaves the ThinkPad's Fn key in its physical position and maps the
-available modifier positions to the corresponding Alt, Super, and Control
-order.
+Kanata leaves the ThinkPad's Fn key in its physical position and uses the
+three keys to the right of Space for the same logical order as the Keychrons:
 
-Right Alt remains ordinary because Sway uses `us(altgr-intl)`. Sway must not
-also swap Alt and Super; the QMK and Kanata configurations already emit the
-final modifier positions.
+    Space  Control  Super  Alt
+
+The printed Right Alt key becomes one-shot right Control, Print Screen becomes
+one-shot right Super, and the printed Right Control key becomes ordinary right
+Alt/AltGr. Sway moves screenshots to Super+Control+3 (output),
+Super+Control+4 (area), and Super+Control+5 (window). The corresponding
+Super+Shift combinations remain the workspace-move bindings.
+
+The resulting right Alt key remains ordinary because Sway uses
+`us(altgr-intl)`. Sway must not also swap Alt and Super; the QMK and Kanata
+configurations already emit the final modifier positions.
 
 ## Kanata for the ThinkPad keyboard
 
@@ -65,9 +72,9 @@ keyboard events, so keep the account trusted.
 ### Validate the mapping and device filter
 
 ```sh
-kanata --check --cfg "$HOME/.config/kanata/kanata.kbd"
+kanata --check --cfg "$HOME/.config/kanata/kanata-linux.kbd"
 sudo kanata --list
-sudo kanata --cfg "$HOME/.config/kanata/kanata.kbd"
+sudo kanata --cfg "$HOME/.config/kanata/kanata-linux.kbd"
 ```
 
 The Linux configuration excludes devices named exactly `Keychron V3 Max` and
@@ -77,7 +84,8 @@ differ. Hold physical left Control + Space + Escape to stop the foreground
 test.
 
 Test Caps, both Shift keys, the three modifiers on each side, Right Alt/AltGr,
-ordinary key repeat, and the Sway shortcuts. Then enable the service:
+ordinary key repeat, and the Sway and screenshot shortcuts. Then enable the
+service:
 
 ```sh
 systemctl --user daemon-reload
@@ -91,7 +99,7 @@ The Linux executable does not support the macOS-only
 editing the configuration:
 
 ```sh
-kanata --check --cfg "$HOME/.config/kanata/kanata.kbd" && \
+kanata --check --cfg "$HOME/.config/kanata/kanata-linux.kbd" && \
   systemctl --user restart kanata.service
 ```
 
