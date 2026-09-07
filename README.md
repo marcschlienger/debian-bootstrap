@@ -28,6 +28,7 @@ The design bet, in three lines:
 | [`default-apps`](default-apps) | Sets which application opens which file type, discovering desktop-file IDs rather than assuming them. Fixes the "PDFs open in GIMP" default. `--list` and `--dry-run` included. |
 | [`deploy-dotfiles`](deploy-dotfiles) | Clones the dotfiles repo to `~/.dotfiles` and stows it, moving Debian's own `~/.bashrc`/`~/.profile` aside first so stow doesn't abort. Also fixes the `~/.ssh` permissions that git and FAT32 always flatten (`--ssh-perms` on its own). Idempotent; `--list`, `--dry-run` and `--delete` do what you'd expect. |
 | [`build-emacs`](build-emacs) | Builds Emacs (pgtk, native-comp, tree-sitter) into a GNU Stow prefix, so versions stay trackable and removable. Check `apt policy emacs-pgtk` first — you may not need it. |
+| [`KEYBOARDS.md`](KEYBOARDS.md) | Installs Kanata for the ThinkPad keyboard and restores, builds, flashes, and recovers the QMK keymaps for the Keychron V3 Max and Q3. |
 
 ## Quick start
 

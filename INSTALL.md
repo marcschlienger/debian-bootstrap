@@ -214,6 +214,13 @@ Run all of these. Fix anything that fails *now*.
       A blank line is a missing server, not an Emacs problem. Re-run
       `./extras lsp` and take the fallback it offers. → guide §8
 
+- [ ] **Keyboard one-shot modifiers**, if wanted:
+
+      Follow [`KEYBOARDS.md`](KEYBOARDS.md). Kanata handles only the ThinkPad
+      keyboard; the Keychron V3 Max and Q3 carry the equivalent QMK layout in
+      their own firmware. Install QMK on either Debian or macOS, not
+      necessarily both.
+
 ---
 
 ## Phase 6 — Network and applications
