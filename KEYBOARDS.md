@@ -77,11 +77,12 @@ sudo kanata --list
 sudo kanata --cfg "$HOME/.config/kanata/kanata-linux.kbd"
 ```
 
-The Linux configuration excludes devices named exactly `Keychron V3 Max` and
-`Keychron Q3`. Compare those strings with the names Kanata reports on this
-machine and correct the configuration before enabling the service if they
-differ. Hold physical left Control + Space + Escape to stop the foreground
-test.
+The Linux configuration includes only the device named exactly
+`AT Translated Set 2 keyboard`. It leaves `ThinkPad Extra Buttons`, `Intel HID
+events`, the Keychrons, and other external keyboards ungrabbed. Compare the
+internal keyboard name with the names Kanata reports on this machine and
+correct the configuration before enabling the service if it differs. Hold
+physical left Control + Space + Escape to stop the foreground test.
 
 Test Caps, both Shift keys, the three modifiers on each side, Right Alt/AltGr,
 ordinary key repeat, and the Sway and screenshot shortcuts. Then enable the
