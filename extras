@@ -127,6 +127,8 @@ GROUP_docs=(
   zathura-pdf-poppler
   poppler-utils   # pdftotext, pdfimages
   pandoc
+  # pandoc-crossref is NOT in Debian in any suite. The post-install hook
+  # points at the upstream binary, which must match the pandoc above.
 )
 
 GROUP_go=(
@@ -219,6 +221,7 @@ GROUP_lsp=(
   build-essential
   git
   # NOT installed here, by design:
+  #   marksman       -> not in Debian at all; the hook points at the binary
   #   ty, ruff       -> uv tool install (see post-install note)
   #   rust-analyzer  -> rustup component add (see post-install note)
   #   pylsp          -> deliberately replaced by ty; the hook offers to purge it
@@ -667,6 +670,19 @@ if [[ " ${SELECTED[*]} " == *" lsp "* ]]; then
 EOF
   fi
 
+  if ! command -v marksman >/dev/null; then
+    cat <<'EOF'
+
+  marksman is not packaged by Debian in any suite. It is the Markdown
+  language server. Upstream ships one self-contained binary per OS:
+
+    # download marksman-linux from:
+    #   https://github.com/artempyanykh/marksman/releases
+    install -m 0755 marksman-linux ~/.local/bin/marksman
+
+EOF
+  fi
+
   # --- rust-analyzer belongs to the toolchain, not the distro.
   if command -v rustup >/dev/null; then
     say "Adding rust-analyzer component"
@@ -684,6 +700,7 @@ EOF
 
     clangd               apt
     lua-language-server  apt if packaged, else upstream tarball
+    marksman             upstream binary; never in Debian
     texlab               apt if packaged, else cargo install --locked texlab
     ty                   uv tool install ty@latest
     ruff                 uv tool install ruff@latest
@@ -693,7 +710,7 @@ EOF
   started from a graphical session inherits PATH from your login shell, so
   confirm both are on it BEFORE debugging "eglot can't find the server":
 
-    command -v ty ruff rust-analyzer clangd texlab lua-language-server
+    command -v ty ruff rust-analyzer clangd texlab lua-language-server marksman
 
   Keeping them current is manual and deliberate:
     uv tool upgrade --all
@@ -702,6 +719,28 @@ EOF
   No Swift or SourceKit component is needed on Linux.
 
 EOF
+fi
+
+if [[ " ${SELECTED[*]} " == *" docs "* ]]; then
+  if ! command -v pandoc-crossref >/dev/null; then
+    cat <<'EOF'
+
+  pandoc-crossref is not packaged by Debian in any suite. It is the pandoc
+  filter that numbers and cross-references figures, tables and equations.
+  Upstream ships a prebuilt archive; unpack the binary per-user:
+
+    # download the Linux archive from:
+    #   https://github.com/lierdakil/pandoc-crossref/releases
+    install -m 0755 pandoc-crossref ~/.local/bin/pandoc-crossref
+
+  Take the release built for the pandoc you have. Upstream warns that a
+  mismatch means "weird stuff will likely happen", so check both:
+
+    pandoc --version | head -1
+    pandoc-crossref --version
+
+EOF
+  fi
 fi
 
 if [[ " ${SELECTED[*]} " == *" python "* ]]; then

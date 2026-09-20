@@ -209,7 +209,7 @@ Run all of these. Fix anything that fails *now*.
 
 - [ ] **Verify every language server resolves:**
 
-      command -v ty ruff rust-analyzer clangd texlab lua-language-server
+      command -v ty ruff rust-analyzer clangd texlab lua-language-server marksman
 
       A blank line is a missing server, not an Emacs problem. Re-run
       `./extras lsp` and take the fallback it offers. → guide §8
